@@ -1,0 +1,9 @@
+## Interface: 100005
+## Title: Pita
+## Author: Scott Ingram
+## Version: v0.1
+## Notes: Shift right click a pet token you already know to cage your existing one.
+
+Debug.lua
+Pita.lua
+locales.xml
