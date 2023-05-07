@@ -71,7 +71,10 @@ end
 function EventHandlers:BAG_UPDATE(bagIndex)
     if PLAYER_LOGIN_DONE then
         debug.trace:print("BAG_UPDATE", bagIndex, "| IsBagOpen(bagId) =",IsBagOpen(bagIndex))
-        addHandlerForCagingToAnyPetsInThisBag(bagIndex)
+        --addHandlerForCagingToAnyPetsInThisBag(bagIndex)
+        addCallbacksToPetTokensInBag(bagIndex)
+        --addCallbacksToPetTokensInBag(bagIndex)
+
     end
 end
 
@@ -87,7 +90,7 @@ function Pita:CreateEventListener()
     debug.info:print(ADDON_NAME.." EventListener:Activate() ...")
 
     local targetSelfAsProxy = self
-    function dispatcher(frame, eventName, ...)
+    local dispatcher = function (frame, eventName, ...)
         EventHandlers[eventName](targetSelfAsProxy, ...)
     end
 
@@ -108,55 +111,56 @@ Pita:CreateEventListener()
 
 function initalizeAddonStuff()
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, addHelpTextToToolTip)
-
-    debug.info:dump(ContainerFrame1)
-    debug.info:dumpKeys(ContainerFrame1)
-    hookOnShowCallbacks()
+    hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
 end
 
-function hookOnShowCallbacks()
-    ContainerFrame1:HookScript("OnShow", fucker)
-    ContainerFrame2:HookScript("OnShow", fucker)
-    ContainerFrame3:HookScript("OnShow", fucker)
-    ContainerFrame4:HookScript("OnShow", fucker)
-    ContainerFrame5:HookScript("OnShow", fucker)
-    ContainerFrame6:HookScript("OnShow", fucker)
-    if true then return end
-
-    for bag=0, NUM_BAGS do
-        local n = C_Container.GetContainerNumSlots(bag)
-        for slot=1, n do
-            local itemId = "ContainerFrame".. bag+1 .."Item".. slot
-            local frame = _G[itemId]
-            local itemLink = C_Container.GetContainerItemLink(bag, slot)
-            local GetSlot, GetBag = frame:GetSlotAndBagID()
-            debug.info:print("bag slots...", bag, slot,itemId,frame,itemLink, GetBag,GetSlot)
-            if frame and not aSlot then
-                debug.info:print("stashing bag, slot =",bag, slot)
-                aSlot = frame
-                anItemLink = itemLink
-                theBagId = bag
-                theSlotId = slot
-                theItemId = itemId
-            end
-        end
+function hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
+    local maxBagIndex = NUM_BAGS - 1
+    for bagIndex=0, maxBagIndex do
+        local bagFrame = getBagFrame(bagIndex)
+        bagFrame:HookScript("OnShow", addCallbacksToPetTokensInBagFrame)
     end
-
 end
 
-function fucker(widget)
-    debug.info:print(widget:GetBagID())
+function getBagFrame(bagIndex)
+    local bagId = bagIndex + 1
+    local bagFrameId = "ContainerFrame" .. bagId
+    return _G[bagFrameId]
 end
+
+function addCallbacksToPetTokensInBag(bagIndex)
+    local bagFrame = getBagFrame(bagIndex)
+    addCallbacksToPetTokensInBagFrame(bagFrame)
+end
+
+function addCallbacksToPetTokensInBagFrame(bagFrame)
+    local bagIndex = bagFrame:GetBagID()
+    debug.info:print(bagIndex)
+    addHandlerForCagingToAnyPetsInThisBag(bagIndex)
+end
+
 -------------------------------------------------------------------------------
 -- Now-Local Functions - even without the "local" keyword or stupidly verbose names
 -------------------------------------------------------------------------------
 
+function hasAnyOfThePetTaughtByThisItem(itemId)
+    if Pita.knownPetTokenIds[itemId] then
+        local _, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
+        local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
+        return numCollected > 0
+    end
+end
 
 function addHelpTextToToolTip(tooltip, data)
     if tooltip == GameTooltip then
-        if data.PitaWasHere then return end
-        if Pita.knownPetTokenIds[data.id] then
-            GameTooltip:AddLine(Pita.L10N.TOOLTIP,0,1,0)
+        -- if data.PitaWasHere then return end
+        local itemId = data.id
+        if hasAnyOfThePetTaughtByThisItem(itemId) then
+            local petName, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
+            local numCollected, limit = C_PetJournal.GetNumCollectedInfo(speciesID)
+            if numCollected > 0 then
+                GameTooltip:AddLine(Pita.L10N.TOOLTIP,0,1,0)
+            end
         end
     end
 end
