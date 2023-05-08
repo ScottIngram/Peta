@@ -22,6 +22,7 @@ end
 -- without fear of colliding with the names inside other addons.
 -- Thus, I leverage Lua's "set function env" (setfenv) to
 -- restrict all of my declarations to my own private "namespace"
+-- Now, I can create "Local" functions without needing the local keyword
 -------------------------------------------------------------------------------
 
 local _G = _G -- but first, grab the global namespace or else we lose it
@@ -33,13 +34,8 @@ setfenv(1, Pita.NAMESPACE)
 -- Constants
 -------------------------------------------------------------------------------
 
-local NUM_BAGS = 6 -- NUM_TOTAL_BAG_FRAMES or Constants.InventoryConstants.NumBagSlots or 6 -- was NUM_CONTAINER_FRAMES
-local BACKPACK_ID = 1
--- some useless global Bliz values:
--- NUM_CONTAINER_FRAMES = 13
--- NUM_TOTAL_BAG_FRAMES = 5
--- Constants.InventoryConstants.NumBagSlots = 4
--- Enum.BagIndex.Backpack = 0
+local MAX_BAG_ID = NUM_TOTAL_BAG_FRAMES + 1
+local MAX_BAG_INDEX = NUM_TOTAL_BAG_FRAMES
 
 -------------------------------------------------------------------------------
 -- Event handlers
@@ -49,7 +45,7 @@ local EventHandlers = {}
 
 function EventHandlers:ADDON_LOADED(addonName)
     if addonName == ADDON_NAME then
-        debug.info:print("ADDON_LOADED", addonName)
+        debug.trace:print("ADDON_LOADED", addonName)
     end
 end
 
@@ -60,37 +56,38 @@ function EventHandlers:PLAYER_LOGIN()
 end
 
 function EventHandlers:PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
-    debug.trace:print("PLAYER_ENTERING_WORLD", isInitialLogin, isReloadingUi)
-end
-
-function EventHandlers:BAG_NEW_ITEMS_UPDATED()
-    debug.trace:print("BAG_NEW_ITEMS_UPDATED")
-    self:Foo()
+    debug.trace:print("PLAYER_ENTERING_WORLD isInitialLogin:", isInitialLogin, "| isReloadingUi:", isReloadingUi)
 end
 
 function EventHandlers:BAG_UPDATE(bagIndex)
-    if PLAYER_LOGIN_DONE then
-        debug.trace:print("BAG_UPDATE", bagIndex, "| IsBagOpen(bagId) =",IsBagOpen(bagIndex))
-        --addHandlerForCagingToAnyPetsInThisBag(bagIndex)
-        addCallbacksToPetTokensInBag(bagIndex)
-        --addCallbacksToPetTokensInBag(bagIndex)
-
+    if not PLAYER_LOGIN_DONE or not IsBagOpen(bagIndex) then
+        return
     end
+
+    debug.trace:print("BAG_UPDATE", bagIndex, "| IsBagOpen(bagId) =", IsBagOpen(bagIndex))
+
+    -- BAG_UPDATE fires when an item:
+    -- * appears in a bag
+    -- * disappears from a bag
+    -- * moves from one slot to another in a bag
+    addCallbacksToPetTokensInBagByIndex("BAG_UPDATE", bagIndex)
 end
 
 function EventHandlers:BAG_OPEN(bagId)
-    debug.info:print("BAG_OPEN", bagId)
+    -- astonishingly, inexplicably,
+    -- "Fired when a lootable container (not an equipped bag) is opened."
+    debug.trace:print("BAG_OPEN", bagId)
 end
 
 -------------------------------------------------------------------------------
--- Event Handler / Listener Registration
+-- Event Handler & Listener Registration
 -------------------------------------------------------------------------------
 
 function Pita:CreateEventListener()
-    debug.info:print(ADDON_NAME.." EventListener:Activate() ...")
+    debug.info:print(ADDON_NAME .. " EventListener:Activate() ...")
 
     local targetSelfAsProxy = self
-    local dispatcher = function (frame, eventName, ...)
+    local dispatcher = function(frame, eventName, ...)
         EventHandlers[eventName](targetSelfAsProxy, ...)
     end
 
@@ -98,7 +95,7 @@ function Pita:CreateEventListener()
     eventListenerFrame:SetScript("OnEvent", dispatcher)
 
     for eventName, _ in pairs(EventHandlers) do
-        debug.info:print("EventListener:activate() - registering ".. eventName)
+        debug.info:print("EventListener:activate() - registering " .. eventName)
         eventListenerFrame:RegisterEvent(eventName)
     end
 end
@@ -114,36 +111,24 @@ function initalizeAddonStuff()
     hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
 end
 
-function hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
-    local maxBagIndex = NUM_BAGS - 1
-    for bagIndex=0, maxBagIndex do
-        local bagFrame = getBagFrame(bagIndex)
-        bagFrame:HookScript("OnShow", addCallbacksToPetTokensInBagFrame)
+-------------------------------------------------------------------------------
+-- Tooltip "Local" Functions
+-------------------------------------------------------------------------------
+
+function addHelpTextToToolTip(tooltip, data)
+    if tooltip == GameTooltip then
+        local itemId = data.id
+        if hasThePetTaughtByThisItem(itemId) then
+            GameTooltip:AddLine(Pita.L10N.TOOLTIP, 0, 1, 0)
+        end
     end
 end
 
-function getBagFrame(bagIndex)
-    local bagId = bagIndex + 1
-    local bagFrameId = "ContainerFrame" .. bagId
-    return _G[bagFrameId]
-end
-
-function addCallbacksToPetTokensInBag(bagIndex)
-    local bagFrame = getBagFrame(bagIndex)
-    addCallbacksToPetTokensInBagFrame(bagFrame)
-end
-
-function addCallbacksToPetTokensInBagFrame(bagFrame)
-    local bagIndex = bagFrame:GetBagID()
-    debug.info:print(bagIndex)
-    addHandlerForCagingToAnyPetsInThisBag(bagIndex)
-end
-
 -------------------------------------------------------------------------------
--- Now-Local Functions - even without the "local" keyword or stupidly verbose names
+-- Pet "Local" Functions
 -------------------------------------------------------------------------------
 
-function hasAnyOfThePetTaughtByThisItem(itemId)
+function hasThePetTaughtByThisItem(itemId)
     if Pita.knownPetTokenIds[itemId] then
         local _, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
         local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
@@ -151,167 +136,244 @@ function hasAnyOfThePetTaughtByThisItem(itemId)
     end
 end
 
-function addHelpTextToToolTip(tooltip, data)
-    if tooltip == GameTooltip then
-        -- if data.PitaWasHere then return end
-        local itemId = data.id
-        if hasAnyOfThePetTaughtByThisItem(itemId) then
-            local petName, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
-            local numCollected, limit = C_PetJournal.GetNumCollectedInfo(speciesID)
-            if numCollected > 0 then
-                GameTooltip:AddLine(Pita.L10N.TOOLTIP,0,1,0)
-            end
+function hasPet(petGuid)
+    debug.trace:print("hasPet():", petGuid)
+    if not petGuid then return end
+    local speciesID = C_PetJournal.GetPetInfoByPetID(petGuid)
+    local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
+    return numCollected > 0
+end
+
+function getPetFromThisBagSlot(bagIndex, slotId)
+    -- bagIndex: 0..n
+    -- slotId: 1..x
+
+    local returnPetInfo
+    local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
+    --debug.trace:print("getPetFromThisBagSlot() itemId:", itemId)
+    if itemId then
+        local petName, _ = C_PetJournal.GetPetInfoByItemID(itemId)
+        if petName then
+            debug.trace:print("getPetFromThisBagSlot() petName:", petName)
+            local _, petGuid = C_PetJournal.FindPetIDByName(petName)
+            debug.trace:print("getPetFromThisBagSlot() petGuid:", petGuid)
+            returnPetInfo = {
+                petGuid = petGuid,
+                petName = petName,
+                itemId = itemId,
+                bagIndex = bagIndex,
+                slotId = slotId,
+            }
         end
+    end
+
+    return returnPetInfo
+end
+
+-------------------------------------------------------------------------------
+-- Click Handler "Local" Functions
+-------------------------------------------------------------------------------
+
+Pita.bagFramesFromOrignalOnShowEvent = {}
+
+function hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
+    for bagIndex = 0, MAX_BAG_INDEX do
+        local bagFrame = getBagFrame(bagIndex)
+        Pita.bagFramesFromOrignalOnShowEvent[bagIndex] = bagFrame
+        bagFrame:HookScript("OnShow", function(...) addCallbacksToPetTokensInBagFrame("OnShow", ...) end)
     end
 end
 
-function addHandlerForCagingToAnyPetsInThisBag(bagIndex)
+function getBagFrame(bagIndex)
     local bagId = bagIndex + 1
-    if bagIndex > NUM_BAGS then
-        debug.info:print("ignoring bag #", bagIndex)
-        return
-    end
-    local name = C_Container.GetBagName(bagIndex) or "BLANK"
-    local isOpen = IsBagOpen(bagIndex)
-    local size = C_Container.GetContainerNumSlots(bagIndex)
-
     local bagFrameId = "ContainerFrame" .. bagId
     local bagFrame = _G[bagFrameId]
-    debug.info:print("bagIndex #", bagIndex, "name:",name, "| size:",size, "| isOpen:",isOpen, "| bagFrameId:", bagFrameId, bagFrame)
+    -- because Bliz's API is fucking brain damaged
+    -- the return values of bagFrame:GetBagID() are based only on OPEN bags (aka, USELESS)
+    -- unless I manually set it my own damn self
+    bagFrame:SetBagID(bagIndex)
+    debug.trace:print("getBagFrame() bagIndex:", bagIndex, "| bagFrameId:", bagFrameId, "| GetBagID():", bagFrame:GetBagID())
+    return bagFrame
+end
 
-    for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
-        local slotId, _ = bagSlotFrame:GetSlotAndBagID()
-        local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
-        local itemInfo = C_Container.GetContainerItemInfo(bagIndex, slotId)
-        debug.info:print(i, ": bagId =", bagIndex,"| slotId =",slotId,"| itemId =",itemId,itemInfo and itemInfo.hyperlink)
+function addCallbacksToPetTokensInBagByIndex(eventName, bagIndex)
+    local bagFrame = getBagFrame(bagIndex)
+    local bagIndex2 = bagFrame:GetBagID()
+    local isOpen = IsBagOpen(bagIndex)
+    debug.info:print("##### addCallbacksToPetTokensInBag()... bagIndex:", bagIndex, "| bagIndex2:", bagIndex2, "| isOpen:", isOpen)
+    if isOpen then
+        addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
+    end
+end
 
-        if itemId then
-            local petName, icon, petType, creatureID, sourceText, description,
-            isWild, canBattle, tradeable, unique, obtainable,
-            displayID, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
-            if petName then
-                debug.info:print(C_PetJournal.GetPetInfoByItemID(itemId))
+Pita.neoBagFrames = {}
+local prevBagFrame = "NONE"
+local prevDaddy = "NADA"
+local prevToken = "ZILCH"
+
+function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
+    --debug.info:dumpKeys(bagFrame)
+    debug.info:print("===== bagFrame:", bagFrame, "| prevBagFrame:", prevBagFrame)
+    prevBagFrame = bagFrame
+    --debug.info:dumpKeys(bagFrame)
+
+    local daddy = bagFrame.GetParent and bagFrame:GetParent()
+    debug.info:print("===== daddy:", daddy, "| prevDaddy:", prevDaddy)
+    prevDaddy = daddy
+    if daddy then
+        debug.info:dumpKeys(daddy)
+    end
+
+    local bagIndex = bagFrame:GetBagID()
+    local argBagFrameName = bagFrame:GetName()
+
+    local shownBagFrame = ContainerFrameUtil_GetShownFrameForID(bagIndex)
+    debug.info:print("===== shownBagFrame:", shownBagFrame, "| bagFrame:", bagFrame)
+
+    -- by the time this method is called (as a result of either OnShow or ON_BAG_UPDATE)
+    --
+    local neoBagFrame = Pita.neoBagFrames[bagIndex]
+    if eventName == "OnShow" then
+        Pita.neoBagFrames[bagIndex] = bagFrame
+        neoBagFrame = bagFrame
+    else
+        local areSame = neoBagFrame == bagFrame
+        debug.info:print(">>>>>", bagIndex, ": replacing 'bad?' self:", bagFrame, " with ", neoBagFrame, " areSame:", areSame)
+        bagFrame = neoBagFrame or bagFrame
+    end
+
+    local neoBagFrameName = neoBagFrame and neoBagFrame:GetName()
+
+    local name = C_Container.GetBagName(bagIndex) or "BLANK"
+    local bagSize = C_Container.GetContainerNumSlots(bagIndex) -- UNRELIABLE (?)
+    local isOpen = IsBagOpen(bagIndex)
+    local ogBagFrame = Pita.bagFramesFromOrignalOnShowEvent[bagIndex]
+    local ogBagFrameName = ogBagFrame and ogBagFrame:GetName()
+    debug.info:print("===== eventName:", eventName, "| bagIndex:", bagIndex, "| name:", name, "| size:", bagSize, "| isOpen:", isOpen)
+    debug.info:print("===== bagFrame:", bagFrame, "| ogBagFrame:", ogBagFrame, "| neoBagFrame:", neoBagFrame, "| argBagFrameName:", argBagFrameName, "| ogBagFrameName:", ogBagFrameName, "| neoBagFrameName:", neoBagFrameName)
+
+    local bagSlots = bagFrame.Items
+    local xSlots = {}
+
+    --[[
+    -- desperation maneuver: combine the recent bagFrames with the original OnShow bagFrames
+    if false and bagFrame ~= ogBagFrame then
+        local ogBagSlots = ogBagFrame.Items
+        local both = {} -- table.insert(bagSlots, table.unpack(ogBagSlots))
+        for i,v in ipairs (bagSlots) do
+            table.insert(both, v)
+            xSlots[v:GetSlotAndBagID()] = v
+            table.insert(xSlots, v)
+        end
+        for i,v in ipairs (ogBagSlots) do
+            table.insert(both, v)
+        end
+        debug.info:print("===== combined bagFrame:",#bagSlots, "| ogBagFrame:",#ogBagSlots, "| both:",#both)
+        bagSlots = both
+    end
+    ]]
+
+    -- bagFrame:EnumerateValidItems() is BUGGED and unreliable, so I can't simply
+    -- for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
+    -- Instead, I must manually fetch the bagSlotFrames
+
+    --testIterator("ONE", bagFrame)
+    --testIterator("TWO", bagFrame)
+
+    --for slotId, bagSlotFrame in bagFrame:EnumerateItems() do
+    for i = 1, #bagSlots do
+        local slotId = i
+        local slotIndex = slotId - 1
+        -- the last bagSlot is stored as the first element of the array.  the first bagSlot is at the end of the array.
+        local slotId = bagSize - slotIndex
+        --local bagSlotFrameId = "ContainerFrame".. bagId .."Item".. slotId
+        --local bagSlotFrame = _G[bagSlotFrameId] -- BIG FAT FAIL
+
+        local bagSlotFrame = bagSlots[i]
+
+        -- BLIZ BUG: when the first time a bag is opened, its bagSlotFrames are not in the right slot.
+        -- So ask it which slot it thinks it's in.  And then, verify it.
+        local actualSlotId = bagSlotFrame:GetSlotAndBagID()
+        local isValidSlotId = actualSlotId > 0
+        if isValidSlotId then
+            local itemLink = C_Container.GetContainerItemLink(bagIndex, actualSlotId)
+            local itemId = C_Container.GetContainerItemID(bagIndex, actualSlotId)
+            local success = bagSlotFrame:HookScript("PreClick", function(...)
+
+                local updatedBagSlots = bagFrame.Items
+                local updatedBagFrame = updatedBagSlots[i]
+                local updatedSlotId = updatedBagFrame:GetSlotAndBagID()
+                local updatedItemLink = C_Container.GetContainerItemLink(bagIndex, updatedSlotId)
+                debug.error:print("SIMPLE TEST FOR ON CLICK! i:", i, "| slotId:",slotId, "| actualSlotId:",actualSlotId, "| updatedSlotId:",updatedSlotId, itemLink or "X", "-->", updatedItemLink or "X")
+            end)
+
+            --local isSame = xSlots[actualSlotId] == bagSlotFrame
+            debug.info:print("XXXXX bagIndex:", bagIndex, "| i:",i, "| slotId:", slotId, "| actualSlotId:", actualSlotId, "| itemId:", itemId, "| itemLink:", itemLink) --, "| isSame:",isSame)--, "| bagSlotFrameMaybe:", bagSlotFrameMaybe)
+
+            local petInfo = getPetFromThisBagSlot(bagIndex, actualSlotId)
+            if petInfo then
                 Pita.knownPetTokenIds[itemId] = true
-                local isAlreadyHooked = bagSlotFrame.Pita
+                debug.info:print("XXXXXXXXXX adding handlers to bagSlotFrame:", bagSlotFrame, "| prevSlotFrame:",prevToken, "| bagIndex:", bagIndex, "| actualSlotId:", actualSlotId)
+                prevToken = bagSlotFrame
+                local success = bagSlotFrame:HookScript("PreClick", function(...) handleCagerClick(petInfo.petName, bagIndex, actualSlotId, ...) end)
+            end
+        end
+
+
+        --[[
+        if itemId then
+            local petName, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
+            if petName then
+                Pita.knownPetTokenIds[itemId] = true
                 local _, petGuid = C_PetJournal.FindPetIDByName(petName)
                 if petGuid then
-                    local numCollected, limit = C_PetJournal.GetNumCollectedInfo(speciesID)
-                    debug.info:print("#### numCollected, limit, isAlreadyHooked =", numCollected, limit, isAlreadyHooked)
-                    if isAlreadyHooked then
-                        debug.info:print("isAlreadyHooked:",isAlreadyHooked)
-                    else
-                        debug.info:print("adding handlers...")
-                        -- C_PetJournal.CagePetByID(petGuid)
-                        -- bagSlotFrame.RegisterCallback("PreClick", init, ProfessionsFrame.CraftingPage)
-                        local existingScript = bagSlotFrame:GetScript("PreClick")
-                        if existingScript then debug.info:print("existingScript:", existingScript) end
-                        bagSlotFrame:SetScript("PreClick", function(...) handleCagerClick(petName, existingScript, ...) end )
-                        -- update the tooltip
-                        local existingToolTipper = bagSlotFrame.UpdateTooltip
-                        if existingToolTipper then debug.info:print("existingToolTipper:", existingToolTipper) end
-                        --bagSlotFrame.Pita_OLD_TOOLTIPPER = existingToolTipper()
-                        bagSlotFrame.Pita = {
-                            oldToolTipper = existingToolTipper
-                        }
-
-                        -- bagSlotFrame.UpdateTooltip = function() enhanceToolTip(bagSlotFrame)  end
-
-                    end
-                elseif isAlreadyHooked then
-                    -- We don't own the pet (anymore) but must have at some point because we hooked the handler
-                    bagSlotFrame:SetScript("PreClick", nil)
-                    bagSlotFrame.UpdateTooltip = bagSlotFrame.Pita.oldToolTipper
-                    bagSlotFrame.Pita = nil
+                    debug.info:print("########## adding handlers to bagSlotFrame:",bagSlotFrame, "| bagIndex:",bagIndex, "| actualSlotId:", actualSlotId)
+                    local success = bagSlotFrame:HookScript("PreClick", function(...) handleCagerClick(petName, bagIndex, actualSlotId, ...) end)
+                    debug.info:print("########## success:",success)
                 end
             end
         end
+        ]]
 
     end
 end
 
-function handleCagerClick(petName, existingScript, widget, whichMouseButtonStr, isPressed)
-    debug.info:print("handleCagerClick:", petGuid, whichMouseButtonStr, isPressed)
-    if IsShiftKeyDown() and whichMouseButtonStr == "RightButton" then
-        local _, petGuid = C_PetJournal.FindPetIDByName(petName)
-        debug.info:print("CAGING:",petGuid)
-        C_PetJournal.CagePetByID(petGuid)
+function testIterator(header, bagFrame)
+    local first, last
+    for i, v in bagFrame:EnumerateItems() do
+        if not first then
+            first = { i = i, v = v, slotId=select(1,v:GetSlotAndBagID()) }
+        end
+        last = { i = i, v = v, slotId=select(1,v:GetSlotAndBagID()) }
     end
+    debug.info:print(header, ".......... testIterator() ... FIRST: i", first.i, "slotId", first.slotId, first.v, "--- LAST: i", last.i, "slotId:", last.slotId, last.v)
 end
 
-function enhanceToolTip(bagSlotFrame)
-
-    local existingToolTipper = bagSlotFrame.Pita.oldToolTipper
-    existingToolTipper(bagSlotFrame)
-    local line3 = GameTooltipTextLeft3:GetText()
-    local doneDid = string.find(line3, Pita.L10N.TOOLTIP, 1, true)
-    if doneDid then
+function handleCagerClick(petName, bagIndex, slotId, bagFrame, whichMouseButtonStr, isPressed)
+    local petInfo = getPetFromThisBagSlot(bagIndex, slotId)
+    local isSameName = petInfo and petInfo.petName and petInfo.petName == petName
+    if not isSameName then
+        debug.info:print("handleCagerClick()... this slot (", bagIndex, slotId, ") has no pet named", petName)
         return
     end
 
-    --debug.info:print("enhanceToolTip()... existingToolTipper:",existingToolTipper)
-    local text = "|cff00FF00"..Pita.L10N.TOOLTIP.."|r"
-
-    existingToolTipper(bagSlotFrame)
-    --GameTooltip:AddLine(Pita.L10N.TOOLTIP,0,1,0)
-    local line3 = GameTooltipTextLeft3:GetText()
-    GameTooltipTextLeft3:SetText(line3  .. "\rPita: " .. Pita.L10N.TOOLTIP)
-    GameTooltip:Show()
-end
-
-function foo()
-    local theBagId, theSlotId, theItemId
-    local aSlot
-    local anItemLink
-    -- Add hook for each bag item.
-    for bag=0, NUM_BAGS do
-        local n = C_Container.GetContainerNumSlots(bag)
-        for slot=1, n do
-            local itemId = "ContainerFrame".. bag+1 .."Item".. slot
-            local frame = _G[itemId]
-            local itemLink = C_Container.GetContainerItemLink(bag, slot)
-            local GetSlot, GetBag = frame:GetSlotAndBagID()
-            debug.info:print("bag slots...", bag, slot,itemId,frame,itemLink, GetBag,GetSlot)
-            if frame and not aSlot then
-                debug.info:print("stashing bag, slot =",bag, slot)
-                aSlot = frame
-                anItemLink = itemLink
-                theBagId = bag
-                theSlotId = slot
-                theItemId = itemId
-            end
-        end
+    local isShiftRightClick = IsShiftKeyDown() and whichMouseButtonStr == "RightButton"
+    if not isShiftRightClick then
+        debug.info:print("handleCagerClick()... abort!  NOT IsShiftKeyDown", IsShiftKeyDown(), "or wrong whichMouseButtonStr", whichMouseButtonStr)
+        return
     end
 
-    -- debug.info:dumpKeys(aSlot)
+    if not hasPet(petInfo.petGuid) then
+        debug.info:print("handleCagerClick()... NONE LEFT:", petName)
+        return
+    end
 
-    debug.info:print("HasItem =",aSlot:HasItem())
-    debug.info:print("theItemId, theBagId, theSlotId =",theItemId, theBagId, theSlotId)
-    local slot, bagID = aSlot:GetSlotAndBagID()
-    debug.info:print("aSlot:GetSlotAndBagID()", slot, bagID)
-    debug.info:print("aSlot:GetItemLocation() ->")
-    debug.info:dump(aSlot:GetItemLocation())
+    debug.info:print("handleCagerClick()... CAGING:", petName)
+    C_PetJournal.CagePetByID(petInfo.petGuid)
+end
 
-    debug.info:print("anItemLink =",anItemLink)
-    debug.info:print("aSlot:GetItem(anItemLink) =",aSlot:GetItem(anItemLink))
-    debug.info:print("aSlot:GetItemID() =",aSlot:GetItemID())
-    debug.info:print("aSlot:GetItemID(anItemLink) =",aSlot:GetItemID(anItemLink))
-    debug.info:print("aSlot:GetItemInfo() =",aSlot:GetItemInfo())
-    debug.info:print("aSlot:GetItemInfo(anItemLink) =",aSlot:GetItemInfo(anItemLink))
-    debug.info:print("GetItemButtonCount",aSlot:GetItemButtonCount())
-    debug.info:print("GetBagID",aSlot:GetBagID())
-
-    debug.info:print("C_Container.GetContainerItemInfo(bagID, slot) ->")
-    local itemInfo = C_Container.GetContainerItemInfo(bagID, slot)
-    debug.info:dump(itemInfo)
-    debug.info:print(itemInfo.hyperlink)
-
-    local itemID = C_Container.GetContainerItemID(bagID, slot)
-    debug.info:print("C_Container.GetContainerItemID(bagID, slot) =",itemID)
-    --local petName = "foo"
-    --debug.info:print("FindPetIDByName() =",C_PetJournal.FindPetIDByName(petName))
-
-    debug.info:print("C_PetJournal.GetPetInfoByItemID(itemID) ->")
-    debug.info:dump(C_PetJournal.GetPetInfoByItemID(itemID))
+local function isHeldBag(bagIndex)
+    return bagIndex >= Enum.BagIndex.Backpack and bagIndex <= NUM_TOTAL_BAG_FRAMES;
 end
 
 -------------------------------------------------------------------------------
@@ -319,13 +381,11 @@ end
 -------------------------------------------------------------------------------
 
 function Pita:Foo()
-    debug.info:print("Foo()")
+    debug.trace:print("Foo()")
     self:Bar()
 end
 
 function Pita:Bar()
-    debug.info:print("Bar()")
-    debug.warn:print("TOOLTIP =", Pita.L10N.TOOLTIP)
-    foo()
+    debug.trace:print("Bar()")
 end
 
