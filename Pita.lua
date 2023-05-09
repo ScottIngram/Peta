@@ -150,13 +150,13 @@ function getPetFromThisBagSlot(bagIndex, slotId)
 
     local returnPetInfo
     local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
-    --debug.trace:print("getPetFromThisBagSlot() itemId:", itemId)
+    --debug.info:out(">",1, "getPetFromThisBagSlot()", "bagIndex",bagIndex, "slotId",slotId, "itemId",itemId)
     if itemId then
         local petName, _ = C_PetJournal.GetPetInfoByItemID(itemId)
         if petName then
-            debug.trace:print("getPetFromThisBagSlot() petName:", petName)
+            debug.info:out(">",2, "getPetFromThisBagSlot()", "petName",petName)
             local _, petGuid = C_PetJournal.FindPetIDByName(petName)
-            debug.trace:print("getPetFromThisBagSlot() petGuid:", petGuid)
+            debug.info:out(">",2, "getPetFromThisBagSlot()", "petGuid",petGuid)
             returnPetInfo = {
                 petGuid = petGuid,
                 petName = petName,
@@ -174,12 +174,9 @@ end
 -- Click Handler "Local" Functions
 -------------------------------------------------------------------------------
 
-Pita.bagFramesFromOrignalOnShowEvent = {}
-
 function hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
     for bagIndex = 0, MAX_BAG_INDEX do
         local bagFrame = getBagFrame(bagIndex)
-        Pita.bagFramesFromOrignalOnShowEvent[bagIndex] = bagFrame
         bagFrame:HookScript("OnShow", function(...) addCallbacksToPetTokensInBagFrame("OnShow", ...) end)
     end
 end
@@ -206,79 +203,47 @@ function addCallbacksToPetTokensInBagByIndex(eventName, bagIndex)
     end
 end
 
-Pita.neoBagFrames = {}
-local prevBagFrame = "NONE"
-local prevDaddy = "NADA"
-local prevToken = "ZILCH"
+-- BLIZ BUG: when a bag is opened for the first time, its contents are in the wrong indices in bagFrame.Items
+-- BLIZ BUG: thus, bagFrame:EnumerateValidItems() is unreliable too (may not return all contents).  So I can't simply
+-- for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
+-- Instead, I must manually fetch the bagSlotFrames
+-- the BagFrame objects shift position between when I attach the click-handlers and when the user clicks / triggers those handlers.  Thus, the lexically scoped variables contain stale data.
+
+Pita.hasBagBeenOpened = {}
+function Pita:isBagNeverOpenedBefore(bagFrame)
+    local bagIndex = bagFrame:GetBagID()
+    return not Pita.hasBagBeenOpened[bagIndex]
+end
+function Pita:markBagAsOpened(bagFrame)
+    local bagIndex = bagFrame:GetBagID()
+    Pita.hasBagBeenOpened[bagIndex] = true
+end
+
 
 function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
-    --debug.info:dumpKeys(bagFrame)
-    debug.info:print("===== bagFrame:", bagFrame, "| prevBagFrame:", prevBagFrame)
-    prevBagFrame = bagFrame
-    --debug.info:dumpKeys(bagFrame)
-
-    local daddy = bagFrame.GetParent and bagFrame:GetParent()
-    debug.info:print("===== daddy:", daddy, "| prevDaddy:", prevDaddy)
-    prevDaddy = daddy
-    if daddy then
-        debug.info:dumpKeys(daddy)
-    end
 
     local bagIndex = bagFrame:GetBagID()
-    local argBagFrameName = bagFrame:GetName()
-
-    local shownBagFrame = ContainerFrameUtil_GetShownFrameForID(bagIndex)
-    debug.info:print("===== shownBagFrame:", shownBagFrame, "| bagFrame:", bagFrame)
-
-    -- by the time this method is called (as a result of either OnShow or ON_BAG_UPDATE)
-    --
-    local neoBagFrame = Pita.neoBagFrames[bagIndex]
-    if eventName == "OnShow" then
-        Pita.neoBagFrames[bagIndex] = bagFrame
-        neoBagFrame = bagFrame
-    else
-        local areSame = neoBagFrame == bagFrame
-        debug.info:print(">>>>>", bagIndex, ": replacing 'bad?' self:", bagFrame, " with ", neoBagFrame, " areSame:", areSame)
-        bagFrame = neoBagFrame or bagFrame
-    end
-
-    local neoBagFrameName = neoBagFrame and neoBagFrame:GetName()
-
-    local name = C_Container.GetBagName(bagIndex) or "BLANK"
+    local bagName = C_Container.GetBagName(bagIndex) or "BLANK"
     local bagSize = C_Container.GetContainerNumSlots(bagIndex) -- UNRELIABLE (?)
     local isOpen = IsBagOpen(bagIndex)
-    local ogBagFrame = Pita.bagFramesFromOrignalOnShowEvent[bagIndex]
-    local ogBagFrameName = ogBagFrame and ogBagFrame:GetName()
-    debug.info:print("===== eventName:", eventName, "| bagIndex:", bagIndex, "| name:", name, "| size:", bagSize, "| isOpen:", isOpen)
-    debug.info:print("===== bagFrame:", bagFrame, "| ogBagFrame:", ogBagFrame, "| neoBagFrame:", neoBagFrame, "| argBagFrameName:", argBagFrameName, "| ogBagFrameName:", ogBagFrameName, "| neoBagFrameName:", neoBagFrameName)
+    local isBagNeverOpenedBefore = Pita:isBagNeverOpenedBefore(bagFrame)
+    debug.info:out("=",5, "addCallbacksToPetTokensInBagFrame()...", "eventName", eventName, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isBagNeverOpenedBefore",isBagNeverOpenedBefore)
+
+    if isBagNeverOpenedBefore then
+        debug.info:out("=",7, "ABORTING! This bag has never been opened and thus is FUBAR")
+        Pita:markBagAsOpened(bagFrame)
+        local delaySeconds = 1
+        -- DELAYED RE-OPEN CALLBACK
+        C_Timer.After(delaySeconds, function()
+            local force = true
+            debug.info:out("=",7, "FORCING bag to reopen...", "bagIndex",bagIndex)
+            OpenBag(bagIndex, force)
+            addCallbacksToPetTokensInBagFrame("FORCED_TO_REOPEN", bagFrame)
+        end)
+        return
+    end
 
     local bagSlots = bagFrame.Items
-    local xSlots = {}
-
-    --[[
-    -- desperation maneuver: combine the recent bagFrames with the original OnShow bagFrames
-    if false and bagFrame ~= ogBagFrame then
-        local ogBagSlots = ogBagFrame.Items
-        local both = {} -- table.insert(bagSlots, table.unpack(ogBagSlots))
-        for i,v in ipairs (bagSlots) do
-            table.insert(both, v)
-            xSlots[v:GetSlotAndBagID()] = v
-            table.insert(xSlots, v)
-        end
-        for i,v in ipairs (ogBagSlots) do
-            table.insert(both, v)
-        end
-        debug.info:print("===== combined bagFrame:",#bagSlots, "| ogBagFrame:",#ogBagSlots, "| both:",#both)
-        bagSlots = both
-    end
-    ]]
-
-    -- bagFrame:EnumerateValidItems() is BUGGED and unreliable, so I can't simply
-    -- for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
-    -- Instead, I must manually fetch the bagSlotFrames
-
-    --testIterator("ONE", bagFrame)
-    --testIterator("TWO", bagFrame)
 
     --for slotId, bagSlotFrame in bagFrame:EnumerateItems() do
     for i = 1, #bagSlots do
@@ -286,8 +251,6 @@ function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
         local slotIndex = slotId - 1
         -- the last bagSlot is stored as the first element of the array.  the first bagSlot is at the end of the array.
         local slotId = bagSize - slotIndex
-        --local bagSlotFrameId = "ContainerFrame".. bagId .."Item".. slotId
-        --local bagSlotFrame = _G[bagSlotFrameId] -- BIG FAT FAIL
 
         local bagSlotFrame = bagSlots[i]
 
@@ -298,8 +261,8 @@ function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
         if isValidSlotId then
             local itemLink = C_Container.GetContainerItemLink(bagIndex, actualSlotId)
             local itemId = C_Container.GetContainerItemID(bagIndex, actualSlotId)
+            -- PRE CLICK HOOK
             local success = bagSlotFrame:HookScript("PreClick", function(...)
-
                 local updatedBagSlots = bagFrame.Items
                 local updatedBagFrame = updatedBagSlots[i]
                 local updatedSlotId = updatedBagFrame:GetSlotAndBagID()
@@ -307,46 +270,17 @@ function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
                 debug.error:print("SIMPLE TEST FOR ON CLICK! i:", i, "| slotId:",slotId, "| actualSlotId:",actualSlotId, "| updatedSlotId:",updatedSlotId, itemLink or "X", "-->", updatedItemLink or "X")
             end)
 
-            --local isSame = xSlots[actualSlotId] == bagSlotFrame
-            debug.info:print("XXXXX bagIndex:", bagIndex, "| i:",i, "| slotId:", slotId, "| actualSlotId:", actualSlotId, "| itemId:", itemId, "| itemLink:", itemLink) --, "| isSame:",isSame)--, "| bagSlotFrameMaybe:", bagSlotFrameMaybe)
+            debug.info:out("=",7, "snafu", "bagIndex", bagIndex, "slotId",slotId, "actualSlotId",actualSlotId, "itemId",itemId, itemLink)
 
             local petInfo = getPetFromThisBagSlot(bagIndex, actualSlotId)
             if petInfo then
                 Pita.knownPetTokenIds[itemId] = true
-                debug.info:print("XXXXXXXXXX adding handlers to bagSlotFrame:", bagSlotFrame, "| prevSlotFrame:",prevToken, "| bagIndex:", bagIndex, "| actualSlotId:", actualSlotId)
-                prevToken = bagSlotFrame
+                debug.info:out("=",7, "adding a PreClick handler for", "petInfo.itemId", petInfo.itemId)
+                -- PRE CLICK HOOK
                 local success = bagSlotFrame:HookScript("PreClick", function(...) handleCagerClick(petInfo.petName, bagIndex, actualSlotId, ...) end)
             end
         end
-
-
-        --[[
-        if itemId then
-            local petName, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
-            if petName then
-                Pita.knownPetTokenIds[itemId] = true
-                local _, petGuid = C_PetJournal.FindPetIDByName(petName)
-                if petGuid then
-                    debug.info:print("########## adding handlers to bagSlotFrame:",bagSlotFrame, "| bagIndex:",bagIndex, "| actualSlotId:", actualSlotId)
-                    local success = bagSlotFrame:HookScript("PreClick", function(...) handleCagerClick(petName, bagIndex, actualSlotId, ...) end)
-                    debug.info:print("########## success:",success)
-                end
-            end
-        end
-        ]]
-
     end
-end
-
-function testIterator(header, bagFrame)
-    local first, last
-    for i, v in bagFrame:EnumerateItems() do
-        if not first then
-            first = { i = i, v = v, slotId=select(1,v:GetSlotAndBagID()) }
-        end
-        last = { i = i, v = v, slotId=select(1,v:GetSlotAndBagID()) }
-    end
-    debug.info:print(header, ".......... testIterator() ... FIRST: i", first.i, "slotId", first.slotId, first.v, "--- LAST: i", last.i, "slotId:", last.slotId, last.v)
 end
 
 function handleCagerClick(petName, bagIndex, slotId, bagFrame, whichMouseButtonStr, isPressed)
