@@ -1,5 +1,5 @@
-local ADDON_NAME, Pita = ...
+local ADDON_NAME, Peta = ...
 
-Pita.L10N = {
+Peta.L10N = {
     TOOLTIP = "Shift-right-click to put in a cage"
 }
