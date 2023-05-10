@@ -1,5 +1,5 @@
 local ADDON_NAME, Pita = ...
-local debug = Pita.DEBUG.newDebugger(Pita.DEBUG.ALL_MSGS)
+local debug = Pita.DEBUG.newDebugger(Pita.DEBUG.INFO)
 local PLAYER_LOGIN_DONE = false
 
 -------------------------------------------------------------------------------
@@ -7,13 +7,20 @@ local PLAYER_LOGIN_DONE = false
 -------------------------------------------------------------------------------
 
 Pita.knownPetTokenIds = {}
+Pita.hasBagBeenOpened = {}
+Pita.hookedBagSlots = {}
+
+Pita.NAMESPACE = {}
+Pita.EventHandlers = {}
+
+local EventHandlers = Pita.EventHandlers -- just for shorthand
 
 -------------------------------------------------------------------------------
 -- Global Functions
 -------------------------------------------------------------------------------
 
 function Pita_Foo()
-
+    -- no global functions yet
 end
 
 -------------------------------------------------------------------------------
@@ -26,7 +33,6 @@ end
 -------------------------------------------------------------------------------
 
 local _G = _G -- but first, grab the global namespace or else we lose it
-Pita.NAMESPACE = {}
 setmetatable(Pita.NAMESPACE, { __index = _G }) -- inherit all member of the Global namespace
 setfenv(1, Pita.NAMESPACE)
 
@@ -34,14 +40,11 @@ setfenv(1, Pita.NAMESPACE)
 -- Constants
 -------------------------------------------------------------------------------
 
-local MAX_BAG_ID = NUM_TOTAL_BAG_FRAMES + 1
 local MAX_BAG_INDEX = NUM_TOTAL_BAG_FRAMES
 
 -------------------------------------------------------------------------------
--- Event handlers
+-- Event Handlers
 -------------------------------------------------------------------------------
-
-local EventHandlers = {}
 
 function EventHandlers:ADDON_LOADED(addonName)
     if addonName == ADDON_NAME then
@@ -80,27 +83,27 @@ function EventHandlers:BAG_OPEN(bagId)
 end
 
 -------------------------------------------------------------------------------
--- Event Handler & Listener Registration
+-- Event Handler Registration
 -------------------------------------------------------------------------------
 
-function Pita:CreateEventListener()
+function createEventListener(targetSelfAsProxy, eventHandlers)
     debug.info:print(ADDON_NAME .. " EventListener:Activate() ...")
 
-    local targetSelfAsProxy = self
-    local dispatcher = function(frame, eventName, ...)
-        EventHandlers[eventName](targetSelfAsProxy, ...)
+    local dispatcher = function(listenerFrame, eventName, ...)
+        -- ignore the listenerFrame and instead
+        eventHandlers[eventName](targetSelfAsProxy, ...)
     end
 
     local eventListenerFrame = CreateFrame("Frame")
     eventListenerFrame:SetScript("OnEvent", dispatcher)
 
-    for eventName, _ in pairs(EventHandlers) do
+    for eventName, _ in pairs(eventHandlers) do
         debug.info:print("EventListener:activate() - registering " .. eventName)
         eventListenerFrame:RegisterEvent(eventName)
     end
 end
 
-Pita:CreateEventListener()
+createEventListener(Pita, Pita.EventHandlers)
 
 -------------------------------------------------------------------------------
 -- Addon Lifecycle
@@ -129,7 +132,7 @@ end
 -------------------------------------------------------------------------------
 
 function hasThePetTaughtByThisItem(itemId)
-    if Pita.knownPetTokenIds[itemId] then
+    if Pita:isPetKnown(itemId) then
         local _, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
         local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
         return numCollected > 0
@@ -209,28 +212,17 @@ end
 -- Instead, I must manually fetch the bagSlotFrames
 -- the BagFrame objects shift position between when I attach the click-handlers and when the user clicks / triggers those handlers.  Thus, the lexically scoped variables contain stale data.
 
-Pita.hasBagBeenOpened = {}
-function Pita:isBagNeverOpenedBefore(bagFrame)
-    local bagIndex = bagFrame:GetBagID()
-    return not Pita.hasBagBeenOpened[bagIndex]
-end
-function Pita:markBagAsOpened(bagFrame)
-    local bagIndex = bagFrame:GetBagID()
-    Pita.hasBagBeenOpened[bagIndex] = true
-end
-
-
 function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
-
     local bagIndex = bagFrame:GetBagID()
     local bagName = C_Container.GetBagName(bagIndex) or "BLANK"
     local bagSize = C_Container.GetContainerNumSlots(bagIndex) -- UNRELIABLE (?)
     local isOpen = IsBagOpen(bagIndex)
     local isBagNeverOpenedBefore = Pita:isBagNeverOpenedBefore(bagFrame)
+    local isHeldBag = isHeldBag(bagIndex)
     debug.info:out("=",5, "addCallbacksToPetTokensInBagFrame()...", "eventName", eventName, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isBagNeverOpenedBefore",isBagNeverOpenedBefore)
 
     if isBagNeverOpenedBefore then
-        debug.info:out("=",7, "ABORTING! This bag has never been opened and thus is FUBAR")
+        debug.info:out("=",7, "ABORT! This bag has never been opened and thus is FUBAR")
         Pita:markBagAsOpened(bagFrame)
         local delaySeconds = 1
         -- DELAYED RE-OPEN CALLBACK
@@ -261,20 +253,24 @@ function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
         if isValidSlotId then
             local itemLink = C_Container.GetContainerItemLink(bagIndex, actualSlotId)
             local itemId = C_Container.GetContainerItemID(bagIndex, actualSlotId)
-            -- PRE CLICK HOOK
-            local success = bagSlotFrame:HookScript("PreClick", function(...)
-                local updatedBagSlots = bagFrame.Items
-                local updatedBagFrame = updatedBagSlots[i]
-                local updatedSlotId = updatedBagFrame:GetSlotAndBagID()
-                local updatedItemLink = C_Container.GetContainerItemLink(bagIndex, updatedSlotId)
-                debug.error:print("SIMPLE TEST FOR ON CLICK! i:", i, "| slotId:",slotId, "| actualSlotId:",actualSlotId, "| updatedSlotId:",updatedSlotId, itemLink or "X", "-->", updatedItemLink or "X")
-            end)
+
+            -- For debugging, add a PreClick handler to every slot.
+            if debug.trace:isActive() then
+                -- PRE CLICK HOOK
+                local success = bagSlotFrame:HookScript("PreClick", function(...)
+                    local updatedBagSlots = bagFrame.Items
+                    local updatedBagFrame = updatedBagSlots[i]
+                    local updatedSlotId = updatedBagFrame:GetSlotAndBagID()
+                    local updatedItemLink = C_Container.GetContainerItemLink(bagIndex, updatedSlotId)
+                    debug.trace:print("SIMPLE TEST FOR ON CLICK! i:", i, "| slotId:",slotId, "| actualSlotId:",actualSlotId, "| updatedSlotId:",updatedSlotId, itemLink or "X", "-->", updatedItemLink or "X")
+                end)
+            end
 
             debug.info:out("=",7, "snafu", "bagIndex", bagIndex, "slotId",slotId, "actualSlotId",actualSlotId, "itemId",itemId, itemLink)
 
             local petInfo = getPetFromThisBagSlot(bagIndex, actualSlotId)
             if petInfo then
-                Pita.knownPetTokenIds[itemId] = true
+                Pita:markPetAsKnown(itemId)
                 debug.info:out("=",7, "adding a PreClick handler for", "petInfo.itemId", petInfo.itemId)
                 -- PRE CLICK HOOK
                 local success = bagSlotFrame:HookScript("PreClick", function(...) handleCagerClick(petInfo.petName, bagIndex, actualSlotId, ...) end)
@@ -287,7 +283,7 @@ function handleCagerClick(petName, bagIndex, slotId, bagFrame, whichMouseButtonS
     local petInfo = getPetFromThisBagSlot(bagIndex, slotId)
     local isSameName = petInfo and petInfo.petName and petInfo.petName == petName
     if not isSameName then
-        debug.info:print("handleCagerClick()... this slot (", bagIndex, slotId, ") has no pet named", petName)
+        debug.warn:print("handleCagerClick()... this slot (", bagIndex, slotId, ") has no pet named", petName)
         return
     end
 
@@ -306,7 +302,7 @@ function handleCagerClick(petName, bagIndex, slotId, bagFrame, whichMouseButtonS
     C_PetJournal.CagePetByID(petInfo.petGuid)
 end
 
-local function isHeldBag(bagIndex)
+function isHeldBag(bagIndex)
     return bagIndex >= Enum.BagIndex.Backpack and bagIndex <= NUM_TOTAL_BAG_FRAMES;
 end
 
@@ -314,12 +310,38 @@ end
 -- Pita Methods
 -------------------------------------------------------------------------------
 
-function Pita:Foo()
-    debug.trace:print("Foo()")
-    self:Bar()
+function Pita:isBagNeverOpenedBefore(bagFrame)
+    local bagIndex = bagFrame:GetBagID()
+    return not self.hasBagBeenOpened[bagIndex]
 end
 
-function Pita:Bar()
-    debug.trace:print("Bar()")
+function Pita:markBagAsOpened(bagFrame)
+    local bagIndex = bagFrame:GetBagID()
+    self.hasBagBeenOpened[bagIndex] = true
 end
 
+function Pita:isPetKnown(itemId)
+    return self.knownPetTokenIds[itemId] or false
+end
+
+function Pita:markPetAsKnown(itemId)
+    self.knownPetTokenIds[itemId] = true
+end
+
+function vivify(matrix, x, y)
+    if not matrix then matrix = {} end
+    if not matrix[x] then matrix[x] = {} end
+    if not matrix[x][y] then matrix[x][y] = {} end
+    -- TODO: automate this so it can support any depth
+end
+
+function Pita:hasSlotBeenHooked(bagSlotFrame)
+    local slotId, bagId = bagSlotFrame:GetSlotAndBagID()
+    vivify(self.hookedBagSlots, bagId, slotId)
+    return self.hookedBagSlots[bagId][slotId] or false
+end
+
+function Pita:markSlotAsHooked(bagSlotFrame)
+    vivify(self.hookedBagSlots, bagId, slotId)
+    self.hookedBagSlots[bagId][slotId] = true
+end
