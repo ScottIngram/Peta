@@ -1,19 +1,13 @@
 local ADDON_NAME, Peta = ...
 local debug = Peta.DEBUG.newDebugger(Peta.DEBUG.ERROR)
-local PLAYER_LOGIN_DONE = false
 
 -------------------------------------------------------------------------------
 -- Peta Data
 -------------------------------------------------------------------------------
 
-Peta.hopefullyReliableBagFrames = {}
-Peta.knownPetTokenIds = {}
-Peta.hasBagBeenOpened = {}
-Peta.hookedBagSlots = {}
 Peta.NAMESPACE = {}
+Peta.hookedBagSlots = {}
 Peta.EventHandlers = {}
-
-local EventHandlers = Peta.EventHandlers -- just for shorthand
 
 -------------------------------------------------------------------------------
 -- Global Functions
@@ -42,11 +36,12 @@ setfenv(1, Peta.NAMESPACE)
 -------------------------------------------------------------------------------
 
 local MAX_BAG_INDEX = NUM_TOTAL_BAG_FRAMES
-local FORCED_TO_REOPEN = "FORCED_TO_REOPEN"
 
 -------------------------------------------------------------------------------
 -- Event Handlers
 -------------------------------------------------------------------------------
+
+local EventHandlers = Peta.EventHandlers -- just for shorthand
 
 function EventHandlers:ADDON_LOADED(addonName)
     if addonName == ADDON_NAME then
@@ -56,32 +51,11 @@ end
 
 function EventHandlers:PLAYER_LOGIN()
     debug.trace:print("PLAYER_LOGIN")
-    PLAYER_LOGIN_DONE = true
     initalizeAddonStuff()
 end
 
 function EventHandlers:PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
     debug.trace:out("",1,"PLAYER_ENTERING_WORLD", "isInitialLogin",isInitialLogin, "isReloadingUi",isReloadingUi)
-end
-
-function EventHandlers:BAG_UPDATE(bagIndex)
-    if not PLAYER_LOGIN_DONE or bagIndex > MAX_BAG_INDEX or not IsBagOpen(bagIndex) then
-        return
-    end
-
-    debug.info:out("",1,"BAG_UPDATE", "bagIndex",bagIndex, "IsBagOpen(bagId)",IsBagOpen(bagId))
-
-    -- BAG_UPDATE fires when an item:
-    -- * appears in a bag
-    -- * disappears from a bag
-    -- * moves from one slot to another in a bag
-    onBagUpdateAddCallbacksToPetTokensInBagByIndex("BAG_UPDATE", bagIndex)
-end
-
-function EventHandlers:BAG_OPEN(bagId)
-    -- astonishingly, inexplicably,
-    -- "Fired when a lootable container (not an equipped bag) is opened."
-    debug.info:print("BAG_OPEN", bagId)
 end
 
 -------------------------------------------------------------------------------
@@ -111,7 +85,7 @@ end
 
 function initalizeAddonStuff()
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, addHelpTextToToolTip)
-    hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
+    hookAllBags()
 end
 
 -------------------------------------------------------------------------------
@@ -132,26 +106,18 @@ end
 -------------------------------------------------------------------------------
 
 function hasThePetTaughtByThisItem(itemId)
-    if Peta:isPetKnown(itemId) then
-        local _, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
+    local _, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
+    if (speciesID) then
         local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
         return numCollected > 0
+    else
+        return false
     end
 end
 
-function hasPet(petGuid)
-    debug.trace:print("hasPet():", petGuid)
-    if not petGuid then return end
-    local speciesID = C_PetJournal.GetPetInfoByPetID(petGuid)
-    local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
-    return numCollected > 0
-end
-
-function getPetFromThisBagSlot(bagIndex, slotId)
-    -- bagIndex: 0..n
-    -- slotId: 1..x
-
+function getPetFromThisBagSlot(bagSlotFrame)
     local returnPetInfo
+    local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
     local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
     --debug.info:out(">",1, "getPetFromThisBagSlot()", "bagIndex",bagIndex, "slotId",slotId, "itemId",itemId)
     if itemId then
@@ -173,154 +139,98 @@ function getPetFromThisBagSlot(bagIndex, slotId)
     return returnPetInfo
 end
 
+function hasPet(petGuid)
+    debug.trace:print("hasPet():", petGuid)
+    if not petGuid then return false end
+    local speciesID = C_PetJournal.GetPetInfoByPetID(petGuid)
+    local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
+    return numCollected > 0
+end
+
 -------------------------------------------------------------------------------
 -- Bag and Inventory Click Hooking "Local" Functions
 -------------------------------------------------------------------------------
 
-function hookOntoTheOnShowEventForAllBagsSoTheyEnhanceTheirPetTokens()
-    for bagIndex = 0, MAX_BAG_INDEX do
-        local bagFrame = getBagFrameSuitableForHookingForOnShow(bagIndex)
+function hookAllBags()
+    for i = 0, MAX_BAG_INDEX do
+        local unreliableBagFrame = getUnreliableBagFrame(i)
+
+        -- HOOK FUNC
         function showMe(bagFrame)
-            local updatedBagIndex = bagFrame:GetBagID()
-            debug.info:out("",1, "OnShow", "bagIndex", bagIndex, "IsBagOpen(bagIndex)", IsBagOpen(bagIndex), "updatedBagIndex",updatedBagIndex)
-            addCallbacksToPetTokensInBagFrame("OnShow", bagFrame)
+            local bagIndex = bagFrame:GetBagID()
+            debug.info:out("",1, "OnShow", "i", i, "IsBagOpen(i)", IsBagOpen(i), "-- bagIndex", bagIndex, "IsBagOpen(bagIndex)", IsBagOpen(bagIndex))
+            if isValidBagFrame(bagFrame) then
+                hookBagSlots(bagFrame)
+            else
+                -- Bliz API provided an uninitialized bag frame.
+                -- force the bag to reopen itself
+                --OpenBag(bagIndex, true) -- THIS!  This is the cause of taint!  FUCK YOU! FUCK YOU! FUCK YOU!
+                --securecallfunction(OpenBag, bagIndex, force) -- not so "secure" is it?!  THIS CAUSES TAINT TOO
+
+                debug.info:out("=",7, "FORCING bag to reopen...", "bagIndex",bagIndex)
+                OpenBag(bagIndex) -- this does NOT cause taint.  Hallelujah
+
+                -- RECURSIVE HOOK FUNC
+                local delaySeconds = 1
+                C_Timer.After(delaySeconds, function()
+                    showMe(bagFrame)
+                end)
+
+            end
         end
-        bagFrame:HookScript("OnShow", showMe)
+
+        unreliableBagFrame:HookScript("OnShow", showMe)
     end
 end
 
--- Manually pulling bags out of BLIZ's global deposit of ContainerFrameX bags doesn't seem to contain reliable data,
--- but the self-reported ContainerFrames provided as "self" to the event callbacks DO seem to be the real-deal
--- although even they are FUBAR the first time they open.  So many bugs, so many workarounds...
-function getBagFrameSuitableForGettingItsContents(bagIndex)
-    -- bagIndex: 0..n
-    return Peta.hopefullyReliableBagFrames[bagIndex] -- or getBagFrameSuitableForHookingForOnShow(bagIndex) -- nope, can't trust it
-end
-
--- I can't rely on this to actually be the on-screen bag frame :(
--- but it seems to work if I just want to react to the ON_SHOW event
-function getBagFrameSuitableForHookingForOnShow(bagIndex)
+-- I can't rely on Bliz's global structures to actually have the on-screen bag frame :(
+-- but it seems to work if I just want to react to the OnShow event
+function getUnreliableBagFrame(bagIndex)
     -- bagIndex: 0..n
     local bagId = bagIndex + 1
     local bagFrameId = "ContainerFrame" .. bagId
-    local bagFrame = _G[bagFrameId]
-
-    -- the values returned  by BLIZ's bagFrame:GetBagID() are based only on OPEN bags and are thus chaotic and unreliable.
-    -- So, I manually set the ID myself
-    bagFrame:SetBagID(bagIndex) -- TODO: is this the source of the taint errors?
-    debug.trace:out("",1, "getBagFrame()", "bagIndex", bagIndex, "bagFrameId", bagFrameId, "GetBagID()", bagFrame:GetBagID())
-    return bagFrame
+    local unreliableBagFrame = _G[bagFrameId]
+    return unreliableBagFrame
 end
 
-function onBagUpdateAddCallbacksToPetTokensInBagByIndex(eventName, bagIndex)
-    local bagFrame = getBagFrameSuitableForGettingItsContents(bagIndex)
-    local bagIndex2 = bagFrame:GetBagID()
-    local isOpen = IsBagOpen(bagIndex)
-    debug.info:out("#",5, "addCallbacksToPetTokensInBag()", "bagIndex", bagIndex, "bagIndex2", bagIndex2, "isOpen", isOpen)
-    if isOpen then
-        addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
+-- I can't rely on Bliz's API to provide me with a valid bag with the proper contents :(
+-- check #1 - verify that all slots in this bag think they are in the same bag
+function isValidBagFrame(bagFrame)
+    local supposedBagIndex
+    for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
+        local slotId, reportedBagIndex = bagSlotFrame:GetSlotAndBagID()
+        if (not supposedBagIndex) then supposedBagIndex = reportedBagIndex end
+        if (supposedBagIndex ~= reportedBagIndex) then
+            return false
+        end
     end
+    return true
 end
 
--- BLIZZARD INTERNAL BUG:
--- When a bag is opened for the first time, its contents are in the wrong indices in bagFrame.Items
--- Thus, bagFrame:EnumerateValidItems() is unreliable too (may not return all contents).  So I can't simply
--- for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
--- Instead, I must manually fetch the bagSlotFrames
--- Furthermore, the BagFrame objects get recycled and shift position
--- sometime after the initial bag open but before the user clicks / triggers those handlers.
--- Thus, the lexically scoped variables contain stale data and are useless.
--- Also the PreClick handlers may be on slots that no longer actually contain the pet tokens.
--- Solution: ignore the bag as it exists on initial open and force the UI to re-open it then re-invoke this
-
-function addCallbacksToPetTokensInBagFrame(eventName, bagFrame)
+function hookBagSlots(bagFrame)
     local bagIndex = bagFrame:GetBagID()
     local bagName = C_Container.GetBagName(bagIndex) or "BLANK"
     local bagSize = C_Container.GetContainerNumSlots(bagIndex) -- UNRELIABLE (?)
     local isOpen = IsBagOpen(bagIndex)
-    local isBagNeverOpenedBefore = Peta:isBagNeverOpenedBefore(bagFrame)
     local isHeldBag = isHeldBag(bagIndex)
-    debug.info:out("=",5, "addCallbacksToPetTokensInBagFrame()...", "eventName", eventName, "bagFrame",bagFrame, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isHeldBag", isHeldBag, "isBagNeverOpenedBefore",isBagNeverOpenedBefore)
+    debug.info:out("=",5, "hookBagToAddHooks()...", "bagFrame",bagFrame, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isHeldBag", isHeldBag)
 
-    if isBagNeverOpenedBefore then
-        debug.info:out("=",7, "ABORT! This bag has never been opened and thus is FUBAR")
-        Peta:markBagAsOpened(bagFrame)
-        local delaySeconds = 1
-        -- DELAYED RECURSION TO RE-OPEN THIS BAG
-        C_Timer.After(delaySeconds, function()
-            local force = true
-            debug.info:out("=",7, "FORCING bag to reopen...", "bagIndex",bagIndex)
-            OpenBag(bagIndex, force)
-            addCallbacksToPetTokensInBagFrame(FORCED_TO_REOPEN, bagFrame)
-        end)
-        return
-    end
-
-    local isReliableBagFrame = (eventName == "OnShow") or (eventName == FORCED_TO_REOPEN)
-    if isReliableBagFrame then
-        -- caching this to be used in lieu of the BUGGED objects in _G["ContainerFrame1"]
-        Peta.hopefullyReliableBagFrames[bagIndex] = bagFrame
-        debug.trace:out("=",7, "STORING frame during OnShow", "bagIndex", bagIndex, "bagFrame",bagFrame)
-    end
-
-    local bagSlots = bagFrame.Items
-
-    -- BLIZ BUG: I cannot rely on --> for slotId, bagSlotFrame in bagFrame:EnumerateItems() do
-    for i = 1, #bagSlots do
-        local slotId = i
-        local slotIndex = slotId - 1
-        -- the last bagSlot is stored as the first element of the array.  the first bagSlot is at the end of the array.
-        local slotId = bagSize - slotIndex
-
-        local bagSlotFrame = bagSlots[i]
-
-        -- BLIZ BUG: when the first time a bag is opened, its bagSlotFrames are not in the right slot.
-        -- So ask it which slot it thinks it's in.  And then, verify it.
-        local actualSlotId = bagSlotFrame:GetSlotAndBagID()
-        local isValidSlotId = actualSlotId > 0 and actualSlotId <= bagSize
-        if isValidSlotId then
-            local isAlreadyHooked = Peta:hasSlotBeenHooked(bagSlotFrame)
-            local existingScript = bagSlotFrame:GetScript("PreClick") -- this is handleCagerClick
-            local hasPetaScript = (existingScript == handleCagerClick)
-            if isAlreadyHooked then
-                debug.info:out("=",9, "ABORT - already hooked", "bagIndex", bagIndex, "slotId",slotId, "handleCagerClick",handleCagerClick, "existingScript",existingScript)
-                --return
-            end
-
-            local itemId = C_Container.GetContainerItemID(bagIndex, actualSlotId)
-            local itemLink = C_Container.GetContainerItemLink(bagIndex, actualSlotId)
-            debug.info:out("=",7, "checking slot for pet...", "bagIndex", bagIndex, "slotId",slotId, "actualSlotId",actualSlotId, "itemId",itemId, "isAlreadyHooked",isAlreadyHooked, "hasPetaScript",hasPetaScript, itemLink)
-
-            -- For debugging, add a PreClick handler to every slot.
-            if debug.trace:isActive() then
-                -- PRE CLICK HOOK
-                function preClicker(...)
-                    local updatedBagSlots = bagFrame.Items
-                    local updatedBagFrame = updatedBagSlots[i]
-                    local updatedSlotId = updatedBagFrame:GetSlotAndBagID()
-                    local updatedItemLink = C_Container.GetContainerItemLink(bagIndex, updatedSlotId)
-                    debug.trace:out("",1, "SIMPLE TEST FOR ON CLICK!", "i", i, "slotId",slotId, "actualSlotId",actualSlotId, "updatedSlotId",updatedSlotId, itemLink or "X", "-->", updatedItemLink or "X")
-                end
-                local success = bagSlotFrame:HookScript("PreClick", preClicker)
-            end
-
-            local petInfo = getPetFromThisBagSlot(bagIndex, actualSlotId)
-            if petInfo and not isAlreadyHooked then
-                Peta:markPetAsKnown(itemId)
-                debug.info:out("=",7, "adding a PreClick handler for", "petInfo.itemId", petInfo.itemId)
-                -- PRE CLICK HOOK
-                local success = bagSlotFrame:HookScript("PreClick", handleCagerClick)
-                Peta:markSlotAsHooked(bagSlotFrame)
-            end
+    for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
+        local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
+        debug.info:out("=",7, "hookBagSlots()...", "i",i, "bagIndex",bagIndex, "slotId",slotId)
+        if not Peta.hookedBagSlots[bagSlotFrame] then
+            Peta.hookedBagSlots[bagSlotFrame] = true
+            --addSimpleClickHandler(bagSlotFrame)
+            local success = bagSlotFrame:HookScript("PreClick", handleCagerClick)
         end
     end
 end
 
 function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
-    local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-    local petInfo = getPetFromThisBagSlot(bagIndex, slotId)
+    local petInfo = getPetFromThisBagSlot(bagSlotFrame)
 
     if not petInfo then
+        local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
         debug.info:out("",1, "handleCagerClick()... abort! NO PET at", "bagIndex",bagIndex, "slotId",slotId)
         return
     end
@@ -342,48 +252,6 @@ end
 
 function isHeldBag(bagIndex)
     return bagIndex >= Enum.BagIndex.Backpack and bagIndex <= NUM_TOTAL_BAG_FRAMES;
-end
-
--------------------------------------------------------------------------------
--- Peta Methods
--------------------------------------------------------------------------------
-
-function Peta:isBagNeverOpenedBefore(bagFrame)
-    local bagIndex = bagFrame:GetBagID()
-    return not self.hasBagBeenOpened[bagIndex]
-end
-
-function Peta:markBagAsOpened(bagFrame)
-    local bagIndex = bagFrame:GetBagID()
-    self.hasBagBeenOpened[bagIndex] = true
-end
-
-function Peta:isPetKnown(itemId)
-    return self.knownPetTokenIds[itemId] or false
-end
-
-function Peta:markPetAsKnown(itemId)
-    self.knownPetTokenIds[itemId] = true
-end
-
--- ensure the data structure is ready to store values at the given coordinates
-function vivify(matrix, x, y)
-    if not matrix then matrix = {} end
-    if not matrix[x] then matrix[x] = {} end
-    --if not matrix[x][y] then matrix[x][y] = {} end
-    -- TODO: automate this so it can support any depth
-end
-
-function Peta:hasSlotBeenHooked(bagSlotFrame)
-    local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-    vivify(self.hookedBagSlots, bagIndex, slotId)
-    return self.hookedBagSlots[bagIndex][slotId] and true or false
-end
-
-function Peta:markSlotAsHooked(bagSlotFrame)
-    local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-    vivify(self.hookedBagSlots, bagIndex, slotId)
-    self.hookedBagSlots[bagIndex][slotId] = true
 end
 
 -------------------------------------------------------------------------------
