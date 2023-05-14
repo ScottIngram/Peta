@@ -65,7 +65,7 @@ function EventHandlers:PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
 end
 
 function EventHandlers:BAG_UPDATE(bagIndex)
-    if not PLAYER_LOGIN_DONE or not IsBagOpen(bagIndex) then
+    if not PLAYER_LOGIN_DONE or bagIndex > MAX_BAG_INDEX or not IsBagOpen(bagIndex) then
         return
     end
 
