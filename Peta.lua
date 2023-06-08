@@ -1,5 +1,5 @@
 local ADDON_NAME, Peta = ...
-local debug = Peta.DEBUG.newDebugger(Peta.DEBUG.ERROR)
+local Debug = Peta.Debug:newDebugger(Peta.Debug.TRACE)
 
 -------------------------------------------------------------------------------
 -- Peta Data
@@ -45,17 +45,17 @@ local EventHandlers = Peta.EventHandlers -- just for shorthand
 
 function EventHandlers:ADDON_LOADED(addonName)
     if addonName == ADDON_NAME then
-        debug.trace:print("ADDON_LOADED", addonName)
+        Debug.trace:print("ADDON_LOADED", addonName)
     end
 end
 
 function EventHandlers:PLAYER_LOGIN()
-    debug.trace:print("PLAYER_LOGIN")
+    Debug.trace:print("PLAYER_LOGIN")
     initalizeAddonStuff()
 end
 
 function EventHandlers:PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
-    debug.trace:out("",1,"PLAYER_ENTERING_WORLD", "isInitialLogin",isInitialLogin, "isReloadingUi",isReloadingUi)
+    Debug.trace:out("",1,"PLAYER_ENTERING_WORLD", "isInitialLogin",isInitialLogin, "isReloadingUi",isReloadingUi)
 end
 
 -------------------------------------------------------------------------------
@@ -63,7 +63,7 @@ end
 -------------------------------------------------------------------------------
 
 function createEventListener(targetSelfAsProxy, eventHandlers)
-    debug.info:print(ADDON_NAME .. " EventListener:Activate() ...")
+    Debug.info:print(ADDON_NAME .. " EventListener:Activate() ...")
 
     local dispatcher = function(listenerFrame, eventName, ...)
         -- ignore the listenerFrame and instead
@@ -74,7 +74,7 @@ function createEventListener(targetSelfAsProxy, eventHandlers)
     eventListenerFrame:SetScript("OnEvent", dispatcher)
 
     for eventName, _ in pairs(eventHandlers) do
-        debug.info:print("EventListener:activate() - registering " .. eventName)
+        Debug.info:print("EventListener:activate() - registering " .. eventName)
         eventListenerFrame:RegisterEvent(eventName)
     end
 end
@@ -119,19 +119,20 @@ function getPetFromThisBagSlot(bagSlotFrame)
     local returnPetInfo
     local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
     local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
-    --debug.info:out(">",1, "getPetFromThisBagSlot()", "bagIndex",bagIndex, "slotId",slotId, "itemId",itemId)
+    --Debug.info:out(">",1, "getPetFromThisBagSlot()", "bagIndex",bagIndex, "slotId",slotId, "itemId",itemId)
     if itemId then
         local petName, _ = C_PetJournal.GetPetInfoByItemID(itemId)
         if petName then
-            debug.info:out(">",2, "getPetFromThisBagSlot()", "petName",petName)
+            Debug.info:out(">",2, "getPetFromThisBagSlot()", "petName",petName)
             local _, petGuid = C_PetJournal.FindPetIDByName(petName)
-            debug.info:out(">",2, "getPetFromThisBagSlot()", "petGuid",petGuid)
+            Debug.info:out(">",2, "getPetFromThisBagSlot()", "petGuid",petGuid)
             returnPetInfo = {
                 petGuid = petGuid,
                 petName = petName,
                 itemId = itemId,
                 bagIndex = bagIndex,
                 slotId = slotId,
+                canTrade = canTrade,
             }
         end
     end
@@ -140,7 +141,7 @@ function getPetFromThisBagSlot(bagSlotFrame)
 end
 
 function hasPet(petGuid)
-    debug.trace:print("hasPet():", petGuid)
+    Debug.trace:print("hasPet():", petGuid)
     if not petGuid then return false end
     local speciesID = C_PetJournal.GetPetInfoByPetID(petGuid)
     local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
@@ -158,7 +159,7 @@ function hookAllBags()
         -- HOOK FUNC
         function showMe(bagFrame)
             local bagIndex = bagFrame:GetBagID()
-            debug.info:out("",1, "OnShow", "i", i, "IsBagOpen(i)", IsBagOpen(i), "-- bagIndex", bagIndex, "IsBagOpen(bagIndex)", IsBagOpen(bagIndex))
+            Debug.info:out("",1, "OnShow", "i", i, "IsBagOpen(i)", IsBagOpen(i), "-- bagIndex", bagIndex, "IsBagOpen(bagIndex)", IsBagOpen(bagIndex))
             if isValidBagFrame(bagFrame) then
                 hookBagSlots(bagFrame)
             else
@@ -167,7 +168,7 @@ function hookAllBags()
                 --OpenBag(bagIndex, true) -- THIS!  This is the cause of taint!  FUCK YOU! FUCK YOU! FUCK YOU!
                 --securecallfunction(OpenBag, bagIndex, force) -- not so "secure" is it?!  THIS CAUSES TAINT TOO
 
-                debug.info:out("=",7, "FORCING bag to reopen...", "bagIndex",bagIndex)
+                Debug.info:out("=",7, "FORCING bag to reopen...", "bagIndex",bagIndex)
                 OpenBag(bagIndex) -- this does NOT cause taint.  Hallelujah
 
                 -- RECURSIVE HOOK FUNC
@@ -213,11 +214,11 @@ function hookBagSlots(bagFrame)
     local bagSize = C_Container.GetContainerNumSlots(bagIndex) -- UNRELIABLE (?)
     local isOpen = IsBagOpen(bagIndex)
     local isHeldBag = isHeldBag(bagIndex)
-    debug.info:out("=",5, "hookBagToAddHooks()...", "bagFrame",bagFrame, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isHeldBag", isHeldBag)
+    Debug.info:out("=",5, "hookBagToAddHooks()...", "bagFrame",bagFrame, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isHeldBag", isHeldBag)
 
     for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
         local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-        debug.info:out("=",7, "hookBagSlots()...", "i",i, "bagIndex",bagIndex, "slotId",slotId)
+        Debug.info:out("=",7, "hookBagSlots()...", "i",i, "bagIndex",bagIndex, "slotId",slotId)
         if not Peta.hookedBagSlots[bagSlotFrame] then
             Peta.hookedBagSlots[bagSlotFrame] = true
             --addSimpleClickHandler(bagSlotFrame)
@@ -231,13 +232,13 @@ function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
 
     if not petInfo then
         local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-        debug.info:out("",1, "handleCagerClick()... abort! NO PET at", "bagIndex",bagIndex, "slotId",slotId)
+        Debug.info:out("",1, "handleCagerClick()... abort! NO PET at", "bagIndex",bagIndex, "slotId",slotId)
         return
     end
 
     local isShiftRightClick = IsShiftKeyDown() and whichMouseButtonStr == "RightButton"
     if not isShiftRightClick then
-        debug.info:print("handleCagerClick()... abort!  NOT IsShiftKeyDown", IsShiftKeyDown(), "or wrong whichMouseButtonStr", whichMouseButtonStr)
+        Debug.info:print("handleCagerClick()... abort!  NOT IsShiftKeyDown", IsShiftKeyDown(), "or wrong whichMouseButtonStr", whichMouseButtonStr)
         return
     end
 
@@ -246,7 +247,7 @@ function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
         return
     end
 
-    debug.info:print("handleCagerClick()... CAGING:", petInfo.petName)
+    Debug.info:print("handleCagerClick()... CAGING:", petInfo.petName)
     C_PetJournal.CagePetByID(petInfo.petGuid)
 end
 
