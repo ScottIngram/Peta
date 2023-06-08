@@ -37,6 +37,13 @@ setfenv(1, Peta.NAMESPACE)
 
 local MAX_BAG_INDEX = NUM_TOTAL_BAG_FRAMES
 
+---@class CAGEY -- IntelliJ-EmmyLua annotation
+local CAGEY = {
+    CAN_CAGE = 1,
+    HAS_NONE = 2,
+    UNCAGEABLE = 3,
+}
+
 -------------------------------------------------------------------------------
 -- Event Handlers
 -------------------------------------------------------------------------------
@@ -95,8 +102,11 @@ end
 function addHelpTextToToolTip(tooltip, data)
     if tooltip == GameTooltip then
         local itemId = data.id
-        if hasThePetTaughtByThisItem(itemId) then
+        local cagey = canCageThisPet(itemId)
+        if CAGEY.CAN_CAGE == cagey then
             GameTooltip:AddLine(Peta.L10N.TOOLTIP, 0, 1, 0)
+        elseif CAGEY.UNCAGEABLE == cagey then
+            GameTooltip:AddLine(Peta.L10N.TOOLTIP_CANNOT_CAGE, 0, 1, 0)
         end
     end
 end
@@ -105,14 +115,21 @@ end
 -- Pet "Local" Functions
 -------------------------------------------------------------------------------
 
-function hasThePetTaughtByThisItem(itemId)
-    local _, _, _, _, _, _, _, _, _, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
-    if (speciesID) then
-        local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
-        return numCollected > 0
+---@return CAGEY -- IntelliJ-EmmyLua annotation
+function canCageThisPet(itemId)
+    local result
+    local _, _, _, _, _, _, _, _, canTrade, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
+    if speciesID then
+        if canTrade then
+            local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
+            result = (numCollected > 0) and CAGEY.CAN_CAGE or CAGEY.HAS_NONE
+        else
+            result = CAGEY.UNCAGEABLE
+        end
     else
-        return false
+        result = CAGEY.HAS_NONE
     end
+    return result
 end
 
 function getPetFromThisBagSlot(bagSlotFrame)
@@ -121,7 +138,7 @@ function getPetFromThisBagSlot(bagSlotFrame)
     local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
     --Debug.info:out(">",1, "getPetFromThisBagSlot()", "bagIndex",bagIndex, "slotId",slotId, "itemId",itemId)
     if itemId then
-        local petName, _ = C_PetJournal.GetPetInfoByItemID(itemId)
+        local petName, _, _, _, _, _, _, _, canTrade = C_PetJournal.GetPetInfoByItemID(itemId)
         if petName then
             Debug.info:out(">",2, "getPetFromThisBagSlot()", "petName",petName)
             local _, petGuid = C_PetJournal.FindPetIDByName(petName)
@@ -242,8 +259,15 @@ function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
         return
     end
 
+    if not petInfo.canTrade then
+        Debug.info:print("handleCagerClick()... abort! untradable pet:", petInfo.petName)
+        UIErrorsFrame:AddMessage(Peta.L10N.TOOLTIP_CANNOT_CAGE, 1.0, 0.1, 0.0)
+        return
+    end
+
     if not hasPet(petInfo.petGuid) then
-        debug.info:print("handleCagerClick()... abort! NONE LEFT:", petInfo.petName)
+        Debug.info:print("handleCagerClick()... abort! NONE LEFT:", petInfo.petName)
+        UIErrorsFrame:AddMessage(Peta.L10N.MSG_HAS_NONE, 1.0, 0.1, 0.0)
         return
     end
 
