@@ -37,7 +37,9 @@ setfenv(1, Peta.NAMESPACE)
 -- Constants
 -------------------------------------------------------------------------------
 
-local MAX_BAG_INDEX = NUM_TOTAL_BAG_FRAMES
+local INCLUDE_BANK = true -- TODO: make this a config option?
+local MAX_INDEX_FOR_CARRIED_BAGS = NUM_BAG_FRAMES -- Bliz blobal
+local MAX_INDEX_FOR_CARRIED_AND_BANK_BAGS = NUM_CONTAINER_FRAMES -- Bliz global
 
 ---@class CAGEY -- IntelliJ-EmmyLua annotation
 local CAGEY = {
@@ -60,11 +62,11 @@ end
 
 function EventHandlers:PLAYER_LOGIN()
     Debug.trace:print("PLAYER_LOGIN")
-    initalizeAddonStuff()
 end
 
 function EventHandlers:PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
     Debug.trace:out("",1,"PLAYER_ENTERING_WORLD", "isInitialLogin",isInitialLogin, "isReloadingUi",isReloadingUi)
+    initalizeAddonStuff()
 end
 
 -------------------------------------------------------------------------------
@@ -95,6 +97,9 @@ end
 function initalizeAddonStuff()
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, addHelpTextToToolTip)
     hookAllBags()
+    if INCLUDE_BANK then
+        hookBankSlots()
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -210,8 +215,10 @@ end
 -------------------------------------------------------------------------------
 
 function hookAllBags()
-    for i = 0, MAX_BAG_INDEX do
+    local maxBagIndex = (INCLUDE_BANK) and MAX_INDEX_FOR_CARRIED_AND_BANK_BAGS or MAX_INDEX_FOR_CARRIED_BAGS
+    for i = 0, maxBagIndex do
         local unreliableBagFrame = getUnreliableBagFrame(i)
+        if not unreliableBagFrame then return end
 
         -- HOOK FUNC
         function showMe(bagFrame)
@@ -276,11 +283,21 @@ function hookBagSlots(bagFrame)
     for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
         local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
         Debug.info:out("=",7, "hookBagSlots()...", "i",i, "bagIndex",bagIndex, "slotId",slotId)
-        if not Peta.hookedBagSlots[bagSlotFrame] then
-            Peta.hookedBagSlots[bagSlotFrame] = true
-            --addSimpleClickHandler(bagSlotFrame)
-            local success = bagSlotFrame:HookScript("PreClick", handleCagerClick)
-        end
+        hookSlot(bagSlotFrame)
+    end
+end
+
+function hookBankSlots()
+    for i=1, NUM_BANKGENERIC_SLOTS, 1 do
+        local bankSlotFrame = BankSlotsFrame["Item"..i];
+        hookSlot(bankSlotFrame)
+    end
+end
+
+function hookSlot(slotFrame)
+    if not Peta.hookedBagSlots[slotFrame] then
+        Peta.hookedBagSlots[slotFrame] = true
+        slotFrame:HookScript("PreClick", handleCagerClick)
     end
 end
 
