@@ -1,5 +1,7 @@
 local ADDON_NAME, Peta = ...
-local Debug = Peta.Debug:newDebugger(Peta.Debug.TRACE)
+
+---@type Debug -- IntelliJ-EmmyLua annotation
+local Debug = Peta.Debug:newDebugger(Peta.Debug.WARN)
 
 -------------------------------------------------------------------------------
 -- Peta Data
@@ -139,6 +141,13 @@ function getPetFromThisBagSlot(bagSlotFrame)
     --Debug.info:out(">",1, "getPetFromThisBagSlot()", "bagIndex",bagIndex, "slotId",slotId, "itemId",itemId)
     if itemId then
         local petName, _, _, _, _, _, _, _, canTrade = C_PetJournal.GetPetInfoByItemID(itemId)
+
+        if not petName then
+            -- Oh GOODY. Bliz's GetPetInfoByItemID() provides zilch from a caged pet.  Thanks Bliz!
+            petName = squeezeBloodFromStone(bagIndex, slotId)
+            canTrade = petName and true -- assume that any pet in a cage can be caged... but, this is Bliz API, so wtf knows.
+        end
+
         if petName then
             Debug.info:out(">",2, "getPetFromThisBagSlot()", "petName",petName)
             local _, petGuid = C_PetJournal.FindPetIDByName(petName)
@@ -155,6 +164,37 @@ function getPetFromThisBagSlot(bagSlotFrame)
     end
 
     return returnPetInfo
+end
+
+function squeezeBloodFromStone(bagIndex, slotId)
+    Debug.trace:dump( C_Container.GetContainerItemInfo(bagIndex, slotId) )
+
+    local d = C_Container.GetContainerItemInfo(bagIndex, slotId)
+    -- Now I get to parse the hyperlink text because inexplicably,
+    -- Bliz's GetContainerItemInfo() doesn't include name (the mind boggles)
+    -- and adding insult to injury, C_Item.GetItemNameByID() only provides "Pet Cage" [facepalm]
+    local str = d.hyperlink
+    if not str then return nil end
+
+    -- verify this is a pet cage
+    local isPet = string.find(str, "battlepet") and true or false
+    Debug.info:out("#",3,"squeezeBloodFromStone()", "isPet",isPet)
+    if not isPet then return nil end
+
+    -- assume the name is inside [Brackets].
+    local start = string.find(str, "[[]") -- search patterns are funky!  google "regular expression"
+    local stop = string.find(str, "]")
+    Debug.info:out("#",3,"squeezeBloodFromStone()", "start",start, "stop",stop)
+    if not (start and stop) then return nil end
+
+    -- move the indices to strip the brackets off the [Name] so it just leaves the name
+    start = start + 1
+    stop = stop - 1
+    if (start >= stop) then return nil end -- the Bliz API could have given me bulshit data such as an empty name []
+
+    local name = string.sub(str, start, stop)
+    Debug.trace:out("#",3,"squeezeBloodFromStone()", "name",name)
+    return name
 end
 
 function hasPet(petGuid)
@@ -246,7 +286,6 @@ end
 
 function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
     local petInfo = getPetFromThisBagSlot(bagSlotFrame)
-
     if not petInfo then
         local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
         Debug.info:out("",1, "handleCagerClick()... abort! NO PET at", "bagIndex",bagIndex, "slotId",slotId)
