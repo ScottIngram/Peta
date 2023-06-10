@@ -1,23 +1,14 @@
 local ADDON_NAME, Peta = ...
 
 ---@type Debug -- IntelliJ-EmmyLua annotation
-local Debug = Peta.Debug:newDebugger(Peta.Debug.WARN)
+local debug = Peta.Debug:newDebugger(Peta.Debug.INFO)
 
 -------------------------------------------------------------------------------
 -- Peta Data
 -------------------------------------------------------------------------------
 
-Peta.NAMESPACE = {}
 Peta.hookedBagSlots = {}
 Peta.EventHandlers = {}
-
--------------------------------------------------------------------------------
--- Global Functions
--------------------------------------------------------------------------------
-
-function Peta_Foo()
-    -- no global functions yet
-end
 
 -------------------------------------------------------------------------------
 -- Namespace Manipulation
@@ -30,14 +21,15 @@ end
 -------------------------------------------------------------------------------
 
 local _G = _G -- but first, grab the global namespace or else we lose it
-setmetatable(Peta.NAMESPACE, { __index = _G }) -- inherit all member of the Global namespace
-setfenv(1, Peta.NAMESPACE)
+setmetatable(Peta, { __index = _G }) -- inherit all member of the Global namespace
+setfenv(1, Peta) -- replace the Global namespace with the Peta table
 
 -------------------------------------------------------------------------------
 -- Constants
 -------------------------------------------------------------------------------
 
 local INCLUDE_BANK = true -- TODO: make this a config option?
+local INCLUDE_CAGED_PET = true -- TODO: make this a config option?
 local MAX_INDEX_FOR_CARRIED_BAGS = NUM_BAG_FRAMES -- Bliz blobal
 local MAX_INDEX_FOR_CARRIED_AND_BANK_BAGS = NUM_CONTAINER_FRAMES -- Bliz global
 
@@ -52,20 +44,18 @@ local CAGEY = {
 -- Event Handlers
 -------------------------------------------------------------------------------
 
-local EventHandlers = Peta.EventHandlers -- just for shorthand
-
 function EventHandlers:ADDON_LOADED(addonName)
     if addonName == ADDON_NAME then
-        Debug.trace:print("ADDON_LOADED", addonName)
+        debug.trace:print("ADDON_LOADED", addonName)
     end
 end
 
 function EventHandlers:PLAYER_LOGIN()
-    Debug.trace:print("PLAYER_LOGIN")
+    debug.trace:print("PLAYER_LOGIN")
 end
 
 function EventHandlers:PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
-    Debug.trace:out("",1,"PLAYER_ENTERING_WORLD", "isInitialLogin",isInitialLogin, "isReloadingUi",isReloadingUi)
+    debug.trace:out("",1,"PLAYER_ENTERING_WORLD", "isInitialLogin",isInitialLogin, "isReloadingUi",isReloadingUi)
     initalizeAddonStuff()
 end
 
@@ -74,7 +64,7 @@ end
 -------------------------------------------------------------------------------
 
 function createEventListener(targetSelfAsProxy, eventHandlers)
-    Debug.info:print(ADDON_NAME .. " EventListener:Activate() ...")
+    debug.info:print(ADDON_NAME .. " EventListener:Activate() ...")
 
     local dispatcher = function(listenerFrame, eventName, ...)
         -- ignore the listenerFrame and instead
@@ -85,7 +75,7 @@ function createEventListener(targetSelfAsProxy, eventHandlers)
     eventListenerFrame:SetScript("OnEvent", dispatcher)
 
     for eventName, _ in pairs(eventHandlers) do
-        Debug.info:print("EventListener:activate() - registering " .. eventName)
+        debug.info:print("EventListener:activate() - registering " .. eventName)
         eventListenerFrame:RegisterEvent(eventName)
     end
 end
@@ -95,7 +85,16 @@ end
 -------------------------------------------------------------------------------
 
 function initalizeAddonStuff()
+    -- modify the tooltip behavior
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, addHelpTextToToolTip)
+    if INCLUDE_CAGED_PET then
+        --TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.AllTypes, addHelpTextToToolTip)
+        --TooltipDataProcessor.AddTooltipPostCall("ALL", addHelpTextToToolTip)
+        -- Neither of the above affect the tooltip produced when the user points at a caged pet in the inventory.
+        -- With tenacious consistency, the Bliz API never fails to disappoint and confound.  Facepalm.
+    end
+
+    -- modify the bahavior of clicking on items in your inventory
     hookAllBags()
     if INCLUDE_BANK then
         hookBankSlots()
@@ -109,7 +108,12 @@ end
 function addHelpTextToToolTip(tooltip, data)
     if tooltip == GameTooltip then
         local itemId = data.id
-        local cagey = canCageThisPet(itemId)
+        local cagey = canCageThisPet(itemId) -- if Bliz ever fixes the problems below, replace this line with those.
+
+        -- callback to handle the fact that Bliz's GetPetInfoByItemID doesn't understand caged pets.  Facepalm.
+        -- Nevermind. (see below)
+        --local cagedPetAnalyzer = nil -- was parseToolTip(tData), but, there's no point (see below)
+        --local petInfo = getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
         if CAGEY.CAN_CAGE == cagey then
             GameTooltip:AddLine(Peta.L10N.TOOLTIP, 0, 1, 0)
         elseif CAGEY.UNCAGEABLE == cagey then
@@ -118,45 +122,77 @@ function addHelpTextToToolTip(tooltip, data)
     end
 end
 
+--[[
+-- Nevermind. This function will never be called because
+-- Bliz provides no way to  affect the tooltip produced when the user points at a caged pet in the inventory.
+
+function parseToolTip(tData)
+    -- TODO: use get item info and check for "Pet Cage" to identify faster
+    local l1 = tData and tData.lines and tData.lines[1]
+    -- TODO: iterate over remaining lines searching for "Collected"
+    local l3 = l1 and tData.lines[3]
+    local collectedText = l3 and l3.leftText
+    local hasPet = collectedText and string.find(collectedText, "Collected")
+    return l1.leftText, hasPet
+end
+]]--
+
 -------------------------------------------------------------------------------
 -- Pet "Local" Functions
 -------------------------------------------------------------------------------
 
 ---@return CAGEY -- IntelliJ-EmmyLua annotation
 function canCageThisPet(itemId)
-    local result
+    local returnStatus
     local _, _, _, _, _, _, _, _, canTrade, _, _, _, speciesID = C_PetJournal.GetPetInfoByItemID(itemId)
     if speciesID then
         if canTrade then
             local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
-            result = (numCollected > 0) and CAGEY.CAN_CAGE or CAGEY.HAS_NONE
+            returnStatus = (numCollected > 0) and CAGEY.CAN_CAGE or CAGEY.HAS_NONE
         else
-            result = CAGEY.UNCAGEABLE
+            returnStatus = CAGEY.UNCAGEABLE
         end
     else
-        result = CAGEY.HAS_NONE
+        returnStatus = CAGEY.HAS_NONE
     end
-    return result
+    return returnStatus
 end
 
-function getPetFromThisBagSlot(bagSlotFrame)
-    local returnPetInfo
+function hasPet(petGuid)
+    debug.trace:print("hasPet():", petGuid)
+    if not petGuid then return false end
+    local speciesID = C_PetJournal.GetPetInfoByPetID(petGuid)
+    local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
+    return numCollected > 0
+end
+
+function getPetInfoFromThisBagSlot(bagSlotFrame)
     local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
     local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
-    --Debug.info:out(">",1, "getPetFromThisBagSlot()", "bagIndex",bagIndex, "slotId",slotId, "itemId",itemId)
-    if itemId then
-        local petName, _, _, _, _, _, _, _, canTrade = C_PetJournal.GetPetInfoByItemID(itemId)
+    -- callback to handle the fact that Bliz's GetPetInfoByItemID doesn't understand caged pets.  Facepalm.
+    local cagedPetAnalyzer = function()
+        return parseHyperlink(bagIndex, slotId)
+    end
+    return getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
+end
 
-        if not petName then
+function getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
+    local returnPetInfo
+    debug.info:out(">",3, "getPetFromThisBagSlot()", "itemId",itemId)
+    if itemId then
+        local petName, _, _, _, _, _, _, _, canTrade, _, _, _, speciesId = C_PetJournal.GetPetInfoByItemID(itemId)
+
+        if not petName and INCLUDE_CAGED_PET and cagedPetAnalyzer then
             -- Oh GOODY. Bliz's GetPetInfoByItemID() provides zilch from a caged pet.  Thanks Bliz!
-            petName = squeezeBloodFromStone(bagIndex, slotId)
+            petName = cagedPetAnalyzer() or nil
             canTrade = petName and true -- assume that any pet in a cage can be caged... but, this is Bliz API, so wtf knows.
         end
 
         if petName then
-            Debug.info:out(">",2, "getPetFromThisBagSlot()", "petName",petName)
+            debug.info:out(">",5, "getPetFromThisBagSlot()", "petName",petName, "speciesId",speciesId)
             local _, petGuid = C_PetJournal.FindPetIDByName(petName)
-            Debug.info:out(">",2, "getPetFromThisBagSlot()", "petGuid",petGuid)
+            local hasPet = hasPet(petGuid)
+            debug.info:out(">",5, "getPetFromThisBagSlot()", "petGuid",petGuid, "hasPet",hasPet)
             returnPetInfo = {
                 petGuid = petGuid,
                 petName = petName,
@@ -164,6 +200,7 @@ function getPetFromThisBagSlot(bagSlotFrame)
                 bagIndex = bagIndex,
                 slotId = slotId,
                 canTrade = canTrade,
+                hasPet = hasPet,
             }
         end
     end
@@ -171,8 +208,8 @@ function getPetFromThisBagSlot(bagSlotFrame)
     return returnPetInfo
 end
 
-function squeezeBloodFromStone(bagIndex, slotId)
-    Debug.trace:dump( C_Container.GetContainerItemInfo(bagIndex, slotId) )
+function parseHyperlink(bagIndex, slotId)
+    debug.trace:dump( C_Container.GetContainerItemInfo(bagIndex, slotId) )
 
     local d = C_Container.GetContainerItemInfo(bagIndex, slotId)
     -- Now I get to parse the hyperlink text because inexplicably,
@@ -183,13 +220,13 @@ function squeezeBloodFromStone(bagIndex, slotId)
 
     -- verify this is a pet cage
     local isPet = string.find(str, "battlepet") and true or false
-    Debug.info:out("#",3,"squeezeBloodFromStone()", "isPet",isPet)
+    debug.info:out("#",3,"squeezeBloodFromStone()", "isPet",isPet)
     if not isPet then return nil end
 
     -- assume the name is inside [Brackets].
     local start = string.find(str, "[[]") -- search patterns are funky!  google "regular expression"
     local stop = string.find(str, "]")
-    Debug.info:out("#",3,"squeezeBloodFromStone()", "start",start, "stop",stop)
+    debug.info:out("#",3,"squeezeBloodFromStone()", "start",start, "stop",stop)
     if not (start and stop) then return nil end
 
     -- move the indices to strip the brackets off the [Name] so it just leaves the name
@@ -198,16 +235,8 @@ function squeezeBloodFromStone(bagIndex, slotId)
     if (start >= stop) then return nil end -- the Bliz API could have given me bulshit data such as an empty name []
 
     local name = string.sub(str, start, stop)
-    Debug.trace:out("#",3,"squeezeBloodFromStone()", "name",name)
+    debug.trace:out("#",3,"squeezeBloodFromStone()", "name",name)
     return name
-end
-
-function hasPet(petGuid)
-    Debug.trace:print("hasPet():", petGuid)
-    if not petGuid then return false end
-    local speciesID = C_PetJournal.GetPetInfoByPetID(petGuid)
-    local numCollected, _ = C_PetJournal.GetNumCollectedInfo(speciesID)
-    return numCollected > 0
 end
 
 -------------------------------------------------------------------------------
@@ -223,7 +252,7 @@ function hookAllBags()
         -- HOOK FUNC
         function showMe(bagFrame)
             local bagIndex = bagFrame:GetBagID()
-            Debug.info:out("",1, "OnShow", "i", i, "IsBagOpen(i)", IsBagOpen(i), "-- bagIndex", bagIndex, "IsBagOpen(bagIndex)", IsBagOpen(bagIndex))
+            debug.info:out("",1, "OnShow", "i", i, "IsBagOpen(i)", IsBagOpen(i), "-- bagIndex", bagIndex, "IsBagOpen(bagIndex)", IsBagOpen(bagIndex))
             if isValidBagFrame(bagFrame) then
                 hookBagSlots(bagFrame)
             else
@@ -232,7 +261,7 @@ function hookAllBags()
                 --OpenBag(bagIndex, true) -- THIS!  This is the cause of taint!  FUCK YOU! FUCK YOU! FUCK YOU!
                 --securecallfunction(OpenBag, bagIndex, force) -- not so "secure" is it?!  THIS CAUSES TAINT TOO
 
-                Debug.info:out("=",7, "FORCING bag to reopen...", "bagIndex",bagIndex)
+                debug.info:out("=",7, "FORCING bag to reopen...", "bagIndex",bagIndex)
                 OpenBag(bagIndex) -- this does NOT cause taint.  Hallelujah
 
                 -- RECURSIVE HOOK FUNC
@@ -278,11 +307,11 @@ function hookBagSlots(bagFrame)
     local bagSize = C_Container.GetContainerNumSlots(bagIndex) -- UNRELIABLE (?)
     local isOpen = IsBagOpen(bagIndex)
     local isHeldBag = isHeldBag(bagIndex)
-    Debug.info:out("=",5, "hookBagToAddHooks()...", "bagFrame",bagFrame, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isHeldBag", isHeldBag)
+    debug.info:out("=",5, "hookBagToAddHooks()...", "bagFrame",bagFrame, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isHeldBag", isHeldBag)
 
     for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
         local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-        Debug.info:out("=",7, "hookBagSlots()...", "i",i, "bagIndex",bagIndex, "slotId",slotId)
+        debug.info:out("=",7, "hookBagSlots()...", "i",i, "bagIndex",bagIndex, "slotId",slotId)
         hookSlot(bagSlotFrame)
     end
 end
@@ -302,32 +331,32 @@ function hookSlot(slotFrame)
 end
 
 function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
-    local petInfo = getPetFromThisBagSlot(bagSlotFrame)
+    local petInfo = getPetInfoFromThisBagSlot(bagSlotFrame)
     if not petInfo then
         local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-        Debug.info:out("",1, "handleCagerClick()... abort! NO PET at", "bagIndex",bagIndex, "slotId",slotId)
+        debug.info:out("",1, "handleCagerClick()... abort! NO PET at", "bagIndex",bagIndex, "slotId",slotId)
         return
     end
 
     local isShiftRightClick = IsShiftKeyDown() and whichMouseButtonStr == "RightButton"
     if not isShiftRightClick then
-        Debug.info:print("handleCagerClick()... abort!  NOT IsShiftKeyDown", IsShiftKeyDown(), "or wrong whichMouseButtonStr", whichMouseButtonStr)
+        debug.info:print("handleCagerClick()... abort!  NOT IsShiftKeyDown", IsShiftKeyDown(), "or wrong whichMouseButtonStr", whichMouseButtonStr)
         return
     end
 
     if not petInfo.canTrade then
-        Debug.info:print("handleCagerClick()... abort! untradable pet:", petInfo.petName)
+        debug.info:print("handleCagerClick()... abort! untradable pet:", petInfo.petName)
         UIErrorsFrame:AddMessage(Peta.L10N.TOOLTIP_CANNOT_CAGE, 1.0, 0.1, 0.0)
         return
     end
 
-    if not hasPet(petInfo.petGuid) then
-        Debug.info:print("handleCagerClick()... abort! NONE LEFT:", petInfo.petName)
+    if not petInfo.hasPet then
+        debug.info:print("handleCagerClick()... abort! NONE LEFT:", petInfo.petName)
         UIErrorsFrame:AddMessage(Peta.L10N.MSG_HAS_NONE, 1.0, 0.1, 0.0)
         return
     end
 
-    Debug.info:print("handleCagerClick()... CAGING:", petInfo.petName)
+    debug.info:print("handleCagerClick()... CAGING:", petInfo.petName)
     C_PetJournal.CagePetByID(petInfo.petGuid)
 end
 
