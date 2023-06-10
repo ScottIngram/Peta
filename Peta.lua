@@ -1,7 +1,7 @@
 local ADDON_NAME, Peta = ...
 
----@type Debug -- IntelliJ-EmmyLua annotation
-local debug = Peta.Debug:newDebugger(Peta.Debug.INFO)
+---@type Debuggers -- IntelliJ-EmmyLua annotation
+local debug = Peta.Debug:newDebugger(Peta.DEBUG_LEVEL.ERROR)
 
 -------------------------------------------------------------------------------
 -- Peta Data
@@ -94,10 +94,11 @@ function initalizeAddonStuff()
         -- With tenacious consistency, the Bliz API never fails to disappoint and confound.  Facepalm.
     end
 
-    -- modify the bahavior of clicking on items in your inventory
-    hookAllBags()
+    -- modify the behavior of clicking on items in your inventory
+    hookAllBagsOnShow()
+    ContainerFrameCombinedBags:HookScript("OnShow", hookUnibagSlots)
     if INCLUDE_BANK then
-        hookBankSlots()
+        BankFrame:HookScript("OnShow", hookBankSlots)
     end
 end
 
@@ -243,7 +244,7 @@ end
 -- Bag and Inventory Click Hooking "Local" Functions
 -------------------------------------------------------------------------------
 
-function hookAllBags()
+function hookAllBagsOnShow()
     local maxBagIndex = (INCLUDE_BANK) and MAX_INDEX_FOR_CARRIED_AND_BANK_BAGS or MAX_INDEX_FOR_CARRIED_BAGS
     for i = 0, maxBagIndex do
         local unreliableBagFrame = getUnreliableBagFrame(i)
@@ -310,15 +311,19 @@ function hookBagSlots(bagFrame)
     debug.info:out("=",5, "hookBagToAddHooks()...", "bagFrame",bagFrame, "bagIndex", bagIndex, "name", bagName, "size", bagSize, "isOpen", isOpen, "isHeldBag", isHeldBag)
 
     for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
-        local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
-        debug.info:out("=",7, "hookBagSlots()...", "i",i, "bagIndex",bagIndex, "slotId",slotId)
         hookSlot(bagSlotFrame)
     end
 end
 
-function hookBankSlots()
+function hookUnibagSlots(unibagFrame)
+    for i, slot in ipairs(unibagFrame.Items) do
+        hookSlot(slot)
+    end
+end
+
+function hookBankSlots(bankSlotsFrame)
     for i=1, NUM_BANKGENERIC_SLOTS, 1 do
-        local bankSlotFrame = BankSlotsFrame["Item"..i];
+        local bankSlotFrame = bankSlotsFrame["Item"..i];
         hookSlot(bankSlotFrame)
     end
 end
@@ -327,6 +332,11 @@ function hookSlot(slotFrame)
     if not Peta.hookedBagSlots[slotFrame] then
         Peta.hookedBagSlots[slotFrame] = true
         slotFrame:HookScript("PreClick", handleCagerClick)
+
+        if debug.info:isActive() then
+            local slotId, bagIndex = slotFrame:GetSlotAndBagID()
+            debug.info:out("=",7, "hookBagSlots()", "bagIndex",bagIndex, "slotId",slotId)
+        end
     end
 end
 
