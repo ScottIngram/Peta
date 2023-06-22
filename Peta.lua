@@ -9,6 +9,7 @@ local debug = Peta.Debug:newDebugger(Peta.DEBUG_LEVEL.ERROR)
 
 Peta.hookedBagSlots = {}
 Peta.EventHandlers = {}
+local didLastDitchHookAttempt
 
 -------------------------------------------------------------------------------
 -- Namespace Manipulation
@@ -32,6 +33,7 @@ local INCLUDE_BANK = true -- TODO: make this a config option?
 local INCLUDE_CAGED_PET = true -- TODO: make this a config option?
 local MAX_INDEX_FOR_CARRIED_BAGS = NUM_BAG_FRAMES -- Bliz blobal
 local MAX_INDEX_FOR_CARRIED_AND_BANK_BAGS = NUM_CONTAINER_FRAMES -- Bliz global
+local BIGGEST_BAG = 64
 
 ---@class CAGEY -- IntelliJ-EmmyLua annotation
 local CAGEY = {
@@ -110,12 +112,22 @@ function addHelpTextToToolTip(tooltip, data)
     if tooltip == GameTooltip then
         local itemId = data.id
         local cagey = canCageThisPet(itemId) -- if Bliz ever fixes the problems below, replace this line with those.
+        local focus = GetMouseFocus()
+        local hasPeta = focus and focus.hasPeta
+        debug.trace:out(X,X,"addHelpTextToToolTip", "thing", focus, "name", focus and focus:GetName(), "hasPeta", hasPeta )
+
+        if not hasPeta and not didLastDitchHookAttempt then
+            tryLastDitchHookAttempt()
+            return
+        end
 
         -- callback to handle the fact that Bliz's GetPetInfoByItemID doesn't understand caged pets.  Facepalm.
         -- Nevermind. (see below)
         --local cagedPetAnalyzer = nil -- was parseToolTip(tData), but, there's no point (see below)
         --local petInfo = getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
-        if CAGEY.CAN_CAGE == cagey then
+        if not hasPeta then
+            GameTooltip:AddLine(Peta.L10N.PETA_HOOKS_FAILED, 0, 1, 0)
+        elseif CAGEY.CAN_CAGE == cagey then
             GameTooltip:AddLine(Peta.L10N.TOOLTIP, 0, 1, 0)
         elseif CAGEY.UNCAGEABLE == cagey then
             GameTooltip:AddLine(Peta.L10N.TOOLTIP_CANNOT_CAGE, 0, 1, 0)
@@ -244,6 +256,26 @@ end
 -- Bag and Inventory Click Hooking "Local" Functions
 -------------------------------------------------------------------------------
 
+function tryLastDitchHookAttempt()
+    if didLastDitchHookAttempt then
+        return
+    end
+    didLastDitchHookAttempt = true
+
+    debug.info:out(X,10,"tryLastDitchHookAttempt()")
+
+    for c = 1, MAX_INDEX_FOR_CARRIED_AND_BANK_BAGS do
+        for slot=1, BIGGEST_BAG do
+            local name = "ContainerFrame"..c.."Item"..slot
+            local slotFrame = _G[name];
+            if slotFrame then
+                debug.info:out(X,5,"tryLastDitchHookAttempt()", "c",c, "slot",slot, "name",name, "slotFrame",slotFrame)
+                hookSlot(slotFrame)
+            end
+        end
+    end
+end
+
 function hookAllBagsOnShow()
     local maxBagIndex = (INCLUDE_BANK) and MAX_INDEX_FOR_CARRIED_AND_BANK_BAGS or MAX_INDEX_FOR_CARRIED_BAGS
     for i = 0, maxBagIndex do
@@ -332,10 +364,11 @@ function hookSlot(slotFrame)
     if not Peta.hookedBagSlots[slotFrame] then
         Peta.hookedBagSlots[slotFrame] = true
         slotFrame:HookScript("PreClick", handleCagerClick)
+        slotFrame.hasPeta = true
 
         if debug.info:isActive() then
             local slotId, bagIndex = slotFrame:GetSlotAndBagID()
-            debug.info:out("=",7, "hookBagSlots()", "bagIndex",bagIndex, "slotId",slotId)
+            debug.trace:out("=",7, "hookBagSlots()", "bagIndex",bagIndex, "slotId",slotId)
         end
     end
 end
