@@ -159,6 +159,7 @@ function isThisItemInSomeBankOrBag(mouseFocus)
     if not name then return end -- Yep, this is a possibility.  facepalm
     if string.find(name, "Container") then return true end
     if string.find(name, "Bank") then return true end
+    if string.find(name, "Baggins") then return true end
 end
 
 --[[
