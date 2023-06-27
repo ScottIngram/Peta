@@ -109,30 +109,45 @@ end
 -------------------------------------------------------------------------------
 
 function addHelpTextToToolTip(tooltip, data)
-    if tooltip == GameTooltip then
-        local itemId = data.id
-        local cagey = canCageThisPet(itemId) -- if Bliz ever fixes the problems below, replace this line with those.
-        local focus = GetMouseFocus()
-        local hasPeta = focus and focus.hasPeta
-        debug.trace:out(X,X,"addHelpTextToToolTip", "thing", focus, "name", focus and focus:GetName(), "hasPeta", hasPeta )
+    if tooltip ~= GameTooltip then return end
 
-        if not hasPeta and not didLastDitchHookAttempt then
-            tryLastDitchHookAttempt()
-            return
-        end
+    local mouseFocus = GetMouseFocus()
+    if not isThisItemInSomeBankOrBag(mouseFocus) then return end
 
-        -- callback to handle the fact that Bliz's GetPetInfoByItemID doesn't understand caged pets.  Facepalm.
-        -- Nevermind. (see below)
-        --local cagedPetAnalyzer = nil -- was parseToolTip(tData), but, there's no point (see below)
-        --local petInfo = getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
-        if not hasPeta then
-            GameTooltip:AddLine(Peta.L10N.PETA_HOOKS_FAILED, 0, 1, 0)
-        elseif CAGEY.CAN_CAGE == cagey then
-            GameTooltip:AddLine(Peta.L10N.TOOLTIP, 0, 1, 0)
-        elseif CAGEY.UNCAGEABLE == cagey then
-            GameTooltip:AddLine(Peta.L10N.TOOLTIP_CANNOT_CAGE, 0, 1, 0)
-        end
+    local hasPeta = mouseFocus.hasPeta
+    if not hasPeta and not didLastDitchHookAttempt then
+        tryLastDitchHookAttempt()
+        return
     end
+
+    local itemId = data.id
+    local cagey = canCageThisPet(itemId) -- if Bliz ever fixes the problems below, replace this line with those.
+    -- callback to handle the fact that Bliz's GetPetInfoByItemID doesn't understand caged pets.  Facepalm.
+    --local cagedPetAnalyzer = nil -- was parseToolTip(tData), but, there's no point (see below)
+    --local petInfo = getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
+    if not hasPeta then
+        GameTooltip:AddLine(Peta.L10N.PETA_HOOKS_FAILED, 0, 1, 0)
+    elseif CAGEY.CAN_CAGE == cagey then
+        GameTooltip:AddLine(Peta.L10N.TOOLTIP, 0, 1, 0)
+    elseif CAGEY.UNCAGEABLE == cagey then
+        GameTooltip:AddLine(Peta.L10N.TOOLTIP_CANNOT_CAGE, 0, 1, 0)
+    end
+end
+
+function isThisItemInSomeBankOrBag(mouseFocus)
+    if not mouseFocus then return false end
+
+    --local bagId = mouseFocus.bagID
+    --local btnSlotId, _ = mouseFocus.GetSlotAndBagID and mouseFocus:GetSlotAndBagID()
+    --local hasItem = mouseFocus.HasItem and mouseFocus:HasItem()
+    -- return (bagId or btnSlotId) and true
+    -- none of the above are reliable.  Thanks Bliz API!
+
+    -- because the API is shite, resort to PARSING STINGS.  facepalm
+    local name = mouseFocus:GetName()
+    if not name then return end -- Yep, this is a possibility.  facepalm
+    if string.find(name, "Container") then return true end
+    if string.find(name, "Bank") then return true end
 end
 
 --[[
