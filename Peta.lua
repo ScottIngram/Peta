@@ -115,9 +115,15 @@ function addHelpTextToToolTip(tooltip, data)
     if not isThisItemInSomeBankOrBag(mouseFocus) then return end
 
     local hasPeta = mouseFocus.hasPeta
-    if not hasPeta and not didLastDitchHookAttempt then
-        tryLastDitchHookAttempt()
-        return
+    if not hasPeta then
+        if not didLastDitchHookAttempt then
+            tryLastDitchHookAttempt()
+            return
+        else
+            -- the REAL last ditch effort
+            local didHook = hookSlot(mouseFocus)
+            if didHook then return end
+        end
     end
 
     local itemId = data.id
@@ -381,16 +387,19 @@ function hookBankSlots(bankSlotsFrame)
 end
 
 function hookSlot(slotFrame)
+    local didHook = false
     if not Peta.hookedBagSlots[slotFrame] then
         Peta.hookedBagSlots[slotFrame] = true
         slotFrame:HookScript("PreClick", handleCagerClick)
         slotFrame.hasPeta = true
+        didHook = true
 
         if debug.info:isActive() then
             local slotId, bagIndex = slotFrame:GetSlotAndBagID()
             debug.trace:out("=",7, "hookBagSlots()", "bagIndex",bagIndex, "slotId",slotId)
         end
     end
+    return didHook
 end
 
 function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
