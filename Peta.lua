@@ -126,7 +126,12 @@ function addHelpTextToToolTip(tooltip, data)
     --local cagedPetAnalyzer = nil -- was parseToolTip(tData), but, there's no point (see below)
     --local petInfo = getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
     if not hasPeta then
-        GameTooltip:AddLine(Peta.L10N.PETA_HOOKS_FAILED, 0, 1, 0)
+        if CAGEY.HAS_NONE == cagey then
+            -- don't interfere with the tooltip if this isn't even a pet token
+            return
+        else
+            GameTooltip:AddLine(Peta.L10N.PETA_HOOKS_FAILED, 0, 1, 0)
+        end
     elseif CAGEY.CAN_CAGE == cagey then
         GameTooltip:AddLine(Peta.L10N.TOOLTIP, 0, 1, 0)
     elseif CAGEY.UNCAGEABLE == cagey then
