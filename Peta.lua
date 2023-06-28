@@ -118,6 +118,7 @@ function addHelpTextToToolTip(tooltip, data)
     if notPet then return end
 
     local mouseFocus = GetMouseFocus()
+    if not mouseFocus.GetSlotAndBagID then return end -- the cagerclick function will fail so don't lie in the tooltip
 
     local hasPeta = mouseFocus.hasPeta
     if not hasPeta then
@@ -125,10 +126,9 @@ function addHelpTextToToolTip(tooltip, data)
         if didHook then return end
     end
 
-    -- callback to handle the fact that Bliz's GetPetInfoByItemID doesn't understand caged pets.  Facepalm.
-    --local cagedPetAnalyzer = nil -- was parseToolTip(tData), but, there's no point (see below)
-    --local petInfo = getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
-    if not hasPeta then
+    if CAGEY.HAS_NONE == cagey then
+        return
+    elseif not hasPeta then
         GameTooltip:AddLine(Peta.L10N.PETA_HOOKS_FAILED, 0, 1, 0)
     elseif CAGEY.CAN_CAGE == cagey then
         GameTooltip:AddLine(Peta.L10N.TOOLTIP, 0, 1, 0)
@@ -167,11 +167,13 @@ function hasPet(petGuid)
 end
 
 function getPetInfoFromThisBagSlot(bagSlotFrame)
+    if not bagSlotFrame.GetSlotAndBagID then return end -- some addons copy Peta onto a non bagSlotFrame
     local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
+    if not (slotId and bagIndex) then return end -- some addons copy Peta onto a non bagSlotFrame
     local itemId = C_Container.GetContainerItemID(bagIndex, slotId)
     -- callback to handle the fact that Bliz's GetPetInfoByItemID doesn't understand caged pets.  Facepalm.
     local cagedPetAnalyzer = function()
-        return parseHyperlink(bagIndex, slotId)
+        return getNameFromHyperlink(bagIndex, slotId)
     end
     return getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
 end
@@ -208,10 +210,9 @@ function getPetInfoFromThisItemId(itemId, cagedPetAnalyzer)
     return returnPetInfo
 end
 
-function parseHyperlink(bagIndex, slotId)
-    debug.trace:dump( C_Container.GetContainerItemInfo(bagIndex, slotId) )
-
+function getNameFromHyperlink(bagIndex, slotId)
     local d = C_Container.GetContainerItemInfo(bagIndex, slotId)
+
     -- Now I get to parse the hyperlink text because inexplicably,
     -- Bliz's GetContainerItemInfo() doesn't include name (the mind boggles)
     -- and adding insult to injury, C_Item.GetItemNameByID() only provides "Pet Cage" [facepalm]
@@ -312,6 +313,7 @@ end
 function isValidBagFrame(bagFrame)
     local supposedBagIndex
     for i, bagSlotFrame in bagFrame:EnumerateValidItems() do
+        if not bagSlotFrame.GetSlotAndBagID then return false end -- some addons copy Peta onto a non bagSlotFrame
         local slotId, reportedBagIndex = bagSlotFrame:GetSlotAndBagID()
         if (not supposedBagIndex) then supposedBagIndex = reportedBagIndex end
         if (supposedBagIndex ~= reportedBagIndex) then
@@ -355,7 +357,7 @@ function hookSlot(slotFrame)
         slotFrame.hasPeta = true
         didHook = true
 
-        if debug.info:isActive() then
+        if debug.info:isActive() and bagSlotFrame.GetSlotAndBagID then
             local slotId, bagIndex = slotFrame:GetSlotAndBagID()
             debug.trace:out("=",7, "hookBagSlots()", "bagIndex",bagIndex, "slotId",slotId)
         end
@@ -366,6 +368,7 @@ end
 function handleCagerClick(bagSlotFrame, whichMouseButtonStr, isPressed)
     local petInfo = getPetInfoFromThisBagSlot(bagSlotFrame)
     if not petInfo then
+        if not bagSlotFrame.GetSlotAndBagID then return end -- some addons copy Peta onto a non bagSlotFrame
         local slotId, bagIndex = bagSlotFrame:GetSlotAndBagID()
         debug.info:out("",1, "handleCagerClick()... abort! NO PET at", "bagIndex",bagIndex, "slotId",slotId)
         return
