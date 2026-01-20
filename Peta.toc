@@ -1,6 +1,6 @@
-## Version: 11.1.0
-## Interface: 111000
-## Category: Battle Pets
+## Version: 12.0.0.prepatch.1
+## Interface: 120000
+## X-Category: Battle Pets
 ## Title: Peta
 ## Author: Scott Ingram
 ## IconTexture: Interface\Icons\inv_box_petcarrier_01
