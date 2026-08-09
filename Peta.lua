@@ -355,7 +355,7 @@ function hookUnibagSlots(unibagFrame)
 end
 
 function hookBankSlots(bankSlotsFrame)
-    for i=1, NUM_BANKGENERIC_SLOTS, 1 do
+    for i=1, NUM_BANKGENERIC_SLOTS, 1 do -- BUG - this global var no longer exists
         local bankSlotFrame = bankSlotsFrame["Item"..i];
         hookSlot(bankSlotFrame)
     end
